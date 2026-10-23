@@ -77,7 +77,7 @@ class Tab2D(QtWidgets.QWidget):
         form.addRow("Гладкость по X:", self.smx)
         self.smz = dspin(0.01, 100, 1.0, 0.5, 2)
         form.addRow("Гладкость по Z:", self.smz)
-        self.beta = dspin(0.001, 1000, 1.0, 0.5, 3)
+        self.beta = dspin(0.001, 1000, 10.0, 1.0, 3)
         self.beta.setToolTip("Начальное отношение beta0 (больше — более гладкий старт)")
         form.addRow("β0 ratio:", self.beta)
 

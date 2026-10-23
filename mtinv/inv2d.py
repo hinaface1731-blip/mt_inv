@@ -30,7 +30,7 @@ class Inv2DSettings:
     z_core: float | None = None   # глубина «рабочей» области, м
     z_growth: float = 1.12
     max_iter: int = 15
-    beta0_ratio: float = 1.0
+    beta0_ratio: float = 10.0
     cooling_factor: float = 2.0
     alpha_s: float = 1e-4
     smooth_x: float = 1.0        # относительный вес горизонтальной гладкости
