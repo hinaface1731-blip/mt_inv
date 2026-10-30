@@ -9,7 +9,7 @@ import os
 import numpy as np
 from PySide6 import QtCore, QtWidgets
 
-from ..joint1d import joint_inversion, mt_data, static_shift_from_model
+from ..joint1d import SHIFT_DEPTH_FRAC, joint_inversion, mt_data, static_shift_from_model
 from ..profile import to_local
 from ..tem import CONFIGS, SIGNAL_UNITS, read_tem_header
 from ..tsikl import RX_MODES
@@ -423,7 +423,8 @@ class TabTEM(QtWidgets.QWidget):
         try:
             r = self._tem_model(snd)
             doi = snd.depth_of_investigation()
-            out = {c: static_shift_from_model(st, r.tops, r.rho, c, max_depth=doi)
+            out = {c: static_shift_from_model(st, r.tops, r.rho, c,
+                                              max_depth=SHIFT_DEPTH_FRAC * doi)
                    for c in ("xy", "yx")}
         except Exception as e:  # noqa: BLE001
             QtWidgets.QApplication.restoreOverrideCursor()
@@ -487,7 +488,8 @@ class TabTEM(QtWidgets.QWidget):
                 progress(f"{snd.name} ({i + 1}/{len(pairs)})")
                 r = cached.get(snd.name) or joint_inversion(tem=snd, label="ЗСБ", **prm)
                 doi = snd.depth_of_investigation()
-                k = [static_shift_from_model(st, r.tops, r.rho, c, max_depth=doi) for c in ("xy", "yx")]
+                k = [static_shift_from_model(st, r.tops, r.rho, c, max_depth=SHIFT_DEPTH_FRAC * doi)
+                     for c in ("xy", "yx")]
                 out.append((snd.name, st.name, r, k))
             return out
 

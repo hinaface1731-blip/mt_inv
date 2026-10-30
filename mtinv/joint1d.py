@@ -204,6 +204,11 @@ def _rt(snd, times, sig):
     return rho_tau(times, sig, snd.tx_radius)
 
 
+# сравнение АМТЗ с моделью ЗСБ — до этой доли глубинности ЗСБ (глубже модель ЗСБ
+# слабо ограничена данными)
+SHIFT_DEPTH_FRAC = 0.5
+
+
 def static_shift_from_model(station, tops, rho, comp="xy", max_depth=None, min_points=2):
     """Множитель статического сдвига по 1D-модели (например, по ЗСБ).
 
