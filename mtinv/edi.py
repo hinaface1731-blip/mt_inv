@@ -85,8 +85,12 @@ def _numbers(lines):
 
 
 def read_edi(path: str) -> Station:
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        text = f.read()
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1251", errors="replace")   # русские EDI часто в cp1251
     blocks = _split_blocks(text)
 
     header = {}

@@ -39,6 +39,11 @@ class CurvesTab(QtWidgets.QWidget):
         b = QtWidgets.QPushButton("Сбросить исключения")
         b.clicked.connect(self.reset_mask)
         ctl.addWidget(b)
+        b = QtWidgets.QPushButton("Автоотбраковка (все станции)")
+        b.setToolTip("Исключить частоты с ошибкой ρa > ~100 %, фазой вне 0–90° "
+                     "и резкими выбросами относительно соседних частот (XY и YX)")
+        b.clicked.connect(self.auto_clean)
+        ctl.addWidget(b)
         ctl.addStretch(1)
 
         ctl2 = QtWidgets.QHBoxLayout()
@@ -81,6 +86,15 @@ class CurvesTab(QtWidgets.QWidget):
         if self.station is None:
             return
         self.station.ss = np.array([self.ssx.value(), self.ssy.value()])
+        self.maskChanged.emit()
+        self.redraw()
+
+    def auto_clean(self):
+        from ..mtdata import auto_mask
+
+        n = sum(auto_mask(st) for st in self.main.stations.values())
+        self.main.statusBar().showMessage(
+            f"Автоотбраковка: исключено ещё {n} частот на {len(self.main.stations)} станциях", 8000)
         self.maskChanged.emit()
         self.redraw()
 

@@ -197,3 +197,35 @@ def median_strike(stations, fmin=None, fmax=None):
     ang = np.deg2rad(v * 4)
     mean = np.rad2deg(np.arctan2(np.mean(np.sin(ang)), np.mean(np.cos(ang)))) / 4.0
     return float(np.mod(mean, 90.0))
+
+
+def auto_mask(st: Station, max_rel_err=0.5, jump=0.4, comps=("xy", "yx"), keep=True):
+    """Автоматическая отбраковка явно плохих частот станции.
+
+    Частота исключается, если хотя бы для одной компоненты:
+      * относительная ошибка |Z| больше max_rel_err (0.5 = ошибка ρa ~100 %);
+      * фаза вне [-5°, 95°] (после переноса YX в 1-й квадрант);
+      * lg ρa отличается от медианы соседей (окно 5 точек) больше чем на jump
+        декады, или фаза — больше чем на 20°.
+    keep=True — уже исключённые вручную точки остаются исключёнными.
+    Возвращает число новых исключённых частот.
+    """
+    bad = np.zeros(len(st.freq), bool)
+    for c in comps:
+        rho, phs, er, ep = st.rho_phase(c)
+        z, ez = st.zcomp(c)
+        rel = ez / np.maximum(np.abs(z), 1e-30)
+        lr = np.log10(np.where(rho > 0, rho, np.nan))
+        b = ~np.isfinite(lr) | ~np.isfinite(phs) | (rel > max_rel_err) | (phs < -5) | (phs > 95)
+        n = len(lr)
+        for i in range(n):
+            lo, hi = max(0, i - 2), min(n, i + 3)
+            nb = [j for j in range(lo, hi) if j != i and not b[j]]
+            if len(nb) >= 2:
+                if abs(lr[i] - np.nanmedian(lr[nb])) > jump or \
+                        abs(phs[i] - np.nanmedian(phs[nb])) > 20:
+                    b[i] = True
+        bad |= b
+    before = int(st.mask.sum())
+    st.mask = (st.mask | bad) if keep else bad
+    return int(st.mask.sum()) - before
