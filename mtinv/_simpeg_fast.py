@@ -57,9 +57,59 @@ class _StoredJMixin:
         return self.Jtvec(m, v, f)
 
 
+class _LogRhoMixin:
+    """Кажущееся сопротивление в данных — ln(ρa) вместо ρa.
+
+    В линейном масштабе с относительной ошибкой занижение ρa моделью
+    штрафуется не больше чем на 1/ошибка σ, а завышение — без ограничений;
+    в логарифмах невязка симметрична. Фаза не меняется."""
+
+    def _rho_rows(self):
+        if getattr(self, "_rows_cache", None) is None:
+            rows = np.zeros(self.survey.nD, bool)
+            slices = self.survey.get_all_slices()
+            for src in self.survey.source_list:
+                for rx in src.receiver_list:
+                    if rx.component == "apparent_resistivity":
+                        rows[slices[src, rx]] = True
+            self._rows_cache = rows
+        return self._rows_cache
+
+    def dpred(self, m=None, f=None):
+        d = np.array(super().dpred(m, f=f), float)
+        rows = self._rho_rows()
+        d[rows] = np.log(np.maximum(d[rows], 1e-12))
+        return d
+
+    def getJ(self, m, f=None):
+        if getattr(self, "_Jmatrix", None) is not None and getattr(self, "_J_is_log", False):
+            return self._Jmatrix
+        if f is None:
+            f = self.fields(m)
+        J = super().getJ(m, f)
+        d = np.array(nsem.simulation.BaseFDEMSimulation.dpred(self, m, f=f), float)
+        rows = self._rho_rows()
+        J[rows] /= np.maximum(d[rows], 1e-12)[:, None]
+        self._Jmatrix = J
+        self._J_is_log = True
+        return J
+
+    @property
+    def _delete_on_model_update(self):
+        return super()._delete_on_model_update + ["_J_is_log"]
+
+
 class FastTE(_StoredJMixin, nsem.simulation.Simulation2DElectricField):
     pass
 
 
 class FastTM(_StoredJMixin, nsem.simulation.Simulation2DMagneticField):
+    pass
+
+
+class FastLogTE(_LogRhoMixin, FastTE):
+    pass
+
+
+class FastLogTM(_LogRhoMixin, FastTM):
     pass

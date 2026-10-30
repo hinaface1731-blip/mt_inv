@@ -2,8 +2,8 @@
 
 Ось x' (ROTATION = strike) направлена вдоль простирания, профиль — вдоль y'.
 TE = Zx'y' (E вдоль простирания), TM = Zy'x'.
-Данные: кажущееся сопротивление и фаза, интерполированные на общий набор
-частот. Параметр модели — ln(sigma) в ячейках ниже поверхности.
+Данные: ln(кажущееся сопротивление) и фаза, интерполированные на общий
+набор частот. Параметр модели — ln(sigma) в ячейках ниже поверхности.
 """
 
 from __future__ import annotations
@@ -201,7 +201,7 @@ def run_inversion(stations, profile, s: Inv2DSettings, progress=None, stop_flag=
     from simpeg.electromagnetics import natural_source as nsem
     from simpeg.utils import get_default_solver
 
-    from ._simpeg_fast import FastTE, FastTM
+    from ._simpeg_fast import FastLogTE, FastLogTM
 
     logs = []
 
@@ -242,13 +242,14 @@ def run_inversion(stations, profile, s: Inv2DSettings, progress=None, stop_flag=
                                             storeProjections=True)]
             srcs.append(nsem.sources.Planewave(rxs, frequency=f))
             ph = ob["phs"][i][ok] - (180.0 if mode == "te" else 0.0)
-            dobs += [ob["rho"][i][ok], ph]
-            std += [ob["erho"][i][ok], ob["ephs"][i][ok]]
+            # ρa подгоняется в логарифмах: ln ρa, ошибка = относительная ошибка ρa
+            dobs += [np.log(ob["rho"][i][ok]), ph]
+            std += [ob["erho"][i][ok] / ob["rho"][i][ok], ob["ephs"][i][ok]]
             idx.append((i, np.where(ok)[0]))
         if not srcs:
             continue
         survey = nsem.survey.Survey(srcs)
-        Sim = FastTE if mode == "te" else FastTM
+        Sim = FastLogTE if mode == "te" else FastLogTM
         sim = Sim(mesh, survey=survey, sigmaMap=sigma_map, solver=solver)
         dat = sdata.Data(survey, dobs=np.concatenate(dobs), standard_deviation=np.concatenate(std))
         dm = data_misfit.L2DataMisfit(data=dat, simulation=sim)
@@ -330,7 +331,7 @@ def run_inversion(stations, profile, s: Inv2DSettings, progress=None, stop_flag=
         k = 0
         for i, cols in idx:
             n = len(cols)
-            R[i, cols] = dp[k:k + n]
+            R[i, cols] = np.exp(dp[k:k + n])
             P[i, cols] = dp[k + n:k + 2 * n] + (180.0 if mode == "te" else 0.0)
             k += 2 * n
         P = np.where(P > 180, P - 360, P)
