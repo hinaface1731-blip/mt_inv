@@ -28,11 +28,14 @@ class Station:
     path: str = ""
     zrot: float = 0.0
     mask: np.ndarray = field(default=None)  # True = частота исключена
+    # множители статического сдвига ρa для строк X (xx, xy) и Y (yx, yy)
+    ss: np.ndarray = field(default=None)
 
     def __post_init__(self):
         self.freq = np.asarray(self.freq, dtype=float)
         if self.mask is None:
             self.mask = np.zeros(len(self.freq), dtype=bool)
+        self.ss = np.ones(2) if self.ss is None else np.asarray(self.ss, float)
         # пустые ошибки -> 5 % от |Z| строки
         bad = ~np.isfinite(self.Zerr) | (self.Zerr <= 0)
         if np.any(bad):
@@ -44,6 +47,19 @@ class Station:
     @property
     def period(self):
         return 1.0 / self.freq
+
+    @property
+    def Zc(self):
+        """Импеданс с учётом статического сдвига (ρa строки умножается на ss)."""
+        return self.Z * np.sqrt(self.ss)[None, :, None]
+
+    @property
+    def Zerrc(self):
+        return self.Zerr * np.sqrt(self.ss)[None, :, None]
+
+    @property
+    def has_static_shift(self):
+        return bool(np.any(np.abs(self.ss - 1.0) > 1e-9))
 
     @property
     def has_tipper(self):
@@ -64,14 +80,15 @@ class Station:
     def zcomp(self, comp: str):
         """Комплексная компонента импеданса и её ошибка."""
         comp = comp.lower()
+        Zc, Ec = self.Zc, self.Zerrc
         if comp in _IDX:
             i, j = _IDX[comp]
-            return self.Z[:, i, j], self.Zerr[:, i, j]
-        Z = self.Z.copy()
+            return Zc[:, i, j], Ec[:, i, j]
+        Z = Zc.copy()
         # отсутствующие диагональные компоненты считаем нулевыми
         for i in (0, 1):
             Z[:, i, i] = np.where(np.isfinite(Z[:, i, i]), Z[:, i, i], 0)
-        eo = np.sqrt(0.5 * (self.Zerr[:, 0, 1] ** 2 + self.Zerr[:, 1, 0] ** 2))
+        eo = np.sqrt(0.5 * (Ec[:, 0, 1] ** 2 + Ec[:, 1, 0] ** 2))
         if comp == "det":
             d = Z[:, 0, 0] * Z[:, 1, 1] - Z[:, 0, 1] * Z[:, 1, 0]
             return np.sqrt(d), eo
@@ -101,12 +118,13 @@ class Station:
     # ------------------------------------------------------------------
     def rotated(self, angle_deg: float) -> "Station":
         """Поворот системы координат на angle по часовой стрелке
-        (ось x' направлена по азимуту angle)."""
+        (ось x' направлена по азимуту angle). Статический сдвиг применяется
+        до поворота."""
         a = np.deg2rad(angle_deg)
         c, s = np.cos(a), np.sin(a)
         R = np.array([[c, s], [-s, c]])
-        Z = np.einsum("ik,fkl,jl->fij", R, self.Z, R)
-        E2 = np.einsum("ik,fkl,jl->fij", R ** 2, self.Zerr ** 2, R ** 2)
+        Z = np.einsum("ik,fkl,jl->fij", R, self.Zc, R)
+        E2 = np.einsum("ik,fkl,jl->fij", R ** 2, self.Zerrc ** 2, R ** 2)
         T = Terr = None
         if self.T is not None:
             T = np.einsum("fk,jk->fj", self.T, R)
@@ -122,8 +140,8 @@ class Station:
         Возвращает dict: phimax, phimin (град), alpha, beta (skew), strike (град),
         ellipticity.
         """
-        X = self.Z.real
-        Y = self.Z.imag
+        X = self.Zc.real
+        Y = self.Zc.imag
         det = X[:, 0, 0] * X[:, 1, 1] - X[:, 0, 1] * X[:, 1, 0]
         det = np.where(np.abs(det) < 1e-30, np.nan, det)
         Xi = np.empty_like(X)
@@ -147,7 +165,7 @@ class Station:
                     strike=alpha - beta, ellipticity=ell)
 
     def swift_skew(self):
-        Z = self.Z
+        Z = self.Zc
         return np.abs(Z[:, 0, 0] + Z[:, 1, 1]) / np.maximum(np.abs(Z[:, 0, 1] - Z[:, 1, 0]), 1e-30)
 
     def induction_arrows(self, convention="parkinson"):

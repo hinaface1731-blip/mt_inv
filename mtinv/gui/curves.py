@@ -41,18 +41,47 @@ class CurvesTab(QtWidgets.QWidget):
         ctl.addWidget(b)
         ctl.addStretch(1)
 
+        ctl2 = QtWidgets.QHBoxLayout()
+        ctl2.addWidget(QtWidgets.QLabel("Статический сдвиг (множитель ρa):  XY ×"))
+        self.ssx = dspin(0.001, 1000, 1.0, 0.05, 3)
+        ctl2.addWidget(self.ssx)
+        ctl2.addWidget(QtWidgets.QLabel("YX ×"))
+        self.ssy = dspin(0.001, 1000, 1.0, 0.05, 3)
+        ctl2.addWidget(self.ssy)
+        for w in (self.ssx, self.ssy):
+            w.valueChanged.connect(self._ss_changed)
+        b = QtWidgets.QPushButton("Без сдвига")
+        b.clicked.connect(lambda: (self.ssx.setValue(1.0), self.ssy.setValue(1.0)))
+        ctl2.addWidget(b)
+        hint2 = QtWidgets.QLabel("(автоматически — на вкладке «АМТЗ + ЗСБ»)")
+        hint2.setStyleSheet("color: gray")
+        ctl2.addWidget(hint2)
+        ctl2.addStretch(1)
+
         hint = QtWidgets.QLabel(
             "Щелчок по точке на графике rho/фазы — исключить/вернуть эту частоту "
             "(для всех компонент). Исключённые точки не идут в инверсию.")
         hint.setStyleSheet("color: gray")
         lay = QtWidgets.QVBoxLayout(self)
         lay.addLayout(ctl)
+        lay.addLayout(ctl2)
         lay.addWidget(hint)
         lay.addWidget(self.plot, 1)
         self.plot.canvas.mpl_connect("button_press_event", self.on_click)
 
     def set_station(self, st):
         self.station = st
+        for w, v in ((self.ssx, st.ss[0] if st else 1.0), (self.ssy, st.ss[1] if st else 1.0)):
+            w.blockSignals(True)
+            w.setValue(float(v))
+            w.blockSignals(False)
+        self.redraw()
+
+    def _ss_changed(self):
+        if self.station is None:
+            return
+        self.station.ss = np.array([self.ssx.value(), self.ssy.value()])
+        self.maskChanged.emit()
         self.redraw()
 
     def reset_mask(self):
@@ -113,6 +142,8 @@ class CurvesTab(QtWidgets.QWidget):
         ar.grid(True, which="both", alpha=0.3)
         ar.legend(fontsize=8, loc="best")
         rot_txt = f", поворот {self.rot.value():.0f}°" if self.rot.value() else ""
+        if st.has_static_shift:
+            rot_txt += f", сдвиг ×{st.ss[0]:.2f}/×{st.ss[1]:.2f}"
         ar.set_title(f"{st.name}  ({st.lat:.4f}, {st.lon:.4f}){rot_txt}", fontsize=10)
         ap.set_ylabel("Фаза, °")
         ap.set_ylim(-10, 100)

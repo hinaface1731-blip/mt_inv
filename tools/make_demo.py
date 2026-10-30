@@ -12,6 +12,25 @@ from mtinv.edi import write_edi  # noqa: E402
 from mtinv.inv2d import Inv2DData, Inv2DSettings, build_mesh, forward_2d  # noqa: E402
 from mtinv.mtdata import Station  # noqa: E402
 from mtinv.profile import from_local  # noqa: E402
+from mtinv.tem import TEMForward, TEMSounding, write_tem  # noqa: E402
+
+# статический сдвиг (множитель ρa строк XY и YX), который «портит» часть станций
+STATIC_SHIFT = {2: (0.35, 0.5), 6: (2.5, 1.8), 10: (0.5, 0.4), 12: (3.0, 2.2)}
+
+
+def true_column(xj):
+    """Истинная 1D-колонка под точкой профиля (для ЗСБ): кровли и ρ."""
+    tops = [0.0, 300.0]
+    rhos = [30.0, 100.0]
+    if xj > 28000:
+        tops += [800.0, 4000.0]
+        rhos += [2000.0, 100.0]
+    elif 14000 < xj < 24000:
+        tops += [2000.0, 6000.0]
+        rhos += [3.0, 100.0]
+    tops.append(25000.0)
+    rhos.append(1000.0)
+    return np.array(rhos), np.diff(tops)
 
 
 def main(out_dir):
@@ -54,8 +73,31 @@ def main(out_dir):
         st = Station(f"TMR{j + 1:03d}", float(lat[j]), float(lon[j]), 50.0 + 5 * j, freqs, Z, Zerr)
         st = st.rotated(-strike)  # из системы простирания в географическую
         st.zrot = 0.0
+        if j in STATIC_SHIFT:  # гальванические искажения в системе измерения
+            kx, ky = STATIC_SHIFT[j]
+            st.Z[:, 0, :] *= np.sqrt(kx)
+            st.Z[:, 1, :] *= np.sqrt(ky)
+            st.Zerr[:, 0, :] *= np.sqrt(kx)
+            st.Zerr[:, 1, :] *= np.sqrt(ky)
         write_edi(st, os.path.join(out_dir, f"TMR{j + 1:03d}.edi"))
-    print("записано", nst, "файлов в", out_dir)
+
+    # ЗСБ рядом с каждой станцией: петля 200 м, центральная установка,
+    # приёмник с эффективной площадью 10000 м², 10 мкс – 8 мс
+    tem_dir = os.path.join(out_dir, "zsb")
+    os.makedirs(tem_dir, exist_ok=True)
+    times = np.logspace(-5, np.log10(8e-3), 30)
+    fwd = TEMForward(times, 200.0)
+    for j in range(nst):
+        rho_c, thick = true_column(x[j])
+        sig = fwd(rho_c, thick)
+        err = 0.03 * sig + 2e-12   # 3 % + шум на поздних временах
+        noisy = sig + err * rng.normal(size=len(sig))
+        la, lo = from_local(x[j] * np.sin(az) - 150 * np.sin(az - np.pi / 2),
+                            x[j] * np.cos(az) + 150, lat0, lon0)
+        snd = TEMSounding(f"ZSB{j + 1:03d}", float(la), float(lo), times, np.abs(noisy), err,
+                          tx_side=200.0)
+        write_tem(snd, os.path.join(tem_dir, f"ZSB{j + 1:03d}.txt"), rx_area=10000.0)
+    print("записано", nst, "EDI и", nst, "ЗСБ в", out_dir)
 
 
 if __name__ == "__main__":

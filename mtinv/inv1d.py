@@ -47,6 +47,93 @@ def layer_mesh(n_layers=40, z_first=10.0, z_max=50000.0):
     return tops, np.diff(tops)
 
 
+def roughness(n_layers, n_extra=0, w_extra=0.1):
+    """Матрица первых разностей по слоям + демпфирование доп. параметров."""
+    R = np.diff(np.eye(n_layers), axis=0)
+    if n_extra:
+        R = np.hstack([R, np.zeros((R.shape[0], n_extra))])
+        D = np.hstack([np.zeros((n_extra, n_layers)), w_extra * np.eye(n_extra)])
+        R = np.vstack([R, D])
+    return R
+
+
+def occam_core(fwd, d, Wd, m0, R, *, max_iter=30, target_rms=1.0, lo=-3.0, hi=6.0,
+               progress=None, h=0.01):
+    """Итерации Оккама: Гаусс–Ньютон + поиск множителя Лагранжа.
+
+    fwd(m) -> прогноз данных той же длины, что d; Wd = 1/ошибки.
+    Пока RMS выше целевого — берётся λ с минимальной невязкой, потом —
+    самая гладкая модель с RMS <= целевого.
+    Возвращает (m, rms, history).
+    """
+    d = np.asarray(d, float)
+    Wd = np.asarray(Wd, float)
+    N = len(d)
+    lo = np.broadcast_to(np.asarray(lo, float), np.shape(m0))
+    hi = np.broadcast_to(np.asarray(hi, float), np.shape(m0))
+
+    def jac(m, f0):
+        J = np.empty((N, len(m)))
+        for i in range(len(m)):
+            mm = m.copy()
+            mm[i] += h
+            J[:, i] = (fwd(mm) - f0) / h
+        return J
+
+    def rms_of(f):
+        return float(np.sqrt(np.mean(((d - f) * Wd) ** 2)))
+
+    RtR = R.T @ R
+    m = np.array(m0, float)
+    f = fwd(m)
+    rms = rms_of(f)
+    history = [rms]
+    lambdas = np.logspace(-3, 4, 22)
+    for it in range(max_iter):
+        J = jac(m, f)
+        JW = J * Wd[:, None]
+        dhat = (d - f + J @ m) * Wd
+        JtJ = JW.T @ JW
+        Jtd = JW.T @ dhat
+        cands = []
+        for lam in lambdas:
+            try:
+                mn = np.linalg.solve(JtJ + lam * RtR, Jtd)
+            except np.linalg.LinAlgError:
+                continue
+            mn = np.clip(mn, lo, hi)
+            fn = fwd(mn)
+            if np.all(np.isfinite(fn)):
+                cands.append((rms_of(fn), lam, mn, fn))
+        if not cands:
+            break
+        best = min(cands, key=lambda c: c[0])
+        if best[0] < target_rms:
+            # фаза 2: самая гладкая модель, достигающая целевого RMS
+            ok_c = [c for c in cands if c[0] <= target_rms]
+            best = max(ok_c, key=lambda c: c[1])
+        new_rms, lam, mn, fn = best
+        if new_rms > rms * 0.999 and rms > target_rms:
+            # нет прогресса — делаем полшага
+            mh = 0.5 * (m + mn)
+            fh = fwd(mh)
+            if rms_of(fh) < rms:
+                mn, fn, new_rms = mh, fh, rms_of(fh)
+            else:
+                break
+        rough_old = np.sum((R @ m) ** 2)
+        rough_new = np.sum((R @ mn) ** 2)
+        m, f, prev = mn, fn, rms
+        rms = new_rms
+        history.append(rms)
+        if progress:
+            progress(it + 1, rms)
+        if rms <= target_rms and prev <= target_rms and \
+                abs(rough_new - rough_old) < 1e-3 * max(rough_old, 1e-9):
+            break
+    return m, rms, history
+
+
 @dataclass
 class Occam1DResult:
     tops: np.ndarray
@@ -97,7 +184,6 @@ def occam1d(freq, rho_a, phase, erho=None, ephs=None, *, n_layers=40, z_first=No
         s_parts.append(s_ph)
     d = np.concatenate(d_parts)
     Wd = 1.0 / np.concatenate(s_parts)
-    N = len(d)
 
     def fwd(m):
         r, p = rho_phase_1d(10 ** m, thick, freq)
@@ -108,66 +194,9 @@ def occam1d(freq, rho_a, phase, erho=None, ephs=None, *, n_layers=40, z_first=No
             out.append(p)
         return np.concatenate(out)
 
-    def jac(m, f0):
-        J = np.empty((N, len(m)))
-        h = 0.01
-        for i in range(len(m)):
-            mm = m.copy()
-            mm[i] += h
-            J[:, i] = (fwd(mm) - f0) / h
-        return J
-
-    def rms_of(f):
-        return float(np.sqrt(np.mean(((d - f) * Wd) ** 2)))
-
     M = n_layers
-    R = np.diff(np.eye(M), axis=0)
-    RtR = R.T @ R
-    m = np.full(M, np.log10(rmed))
-    f = fwd(m)
-    rms = rms_of(f)
-    history = [rms]
-    lambdas = np.logspace(-3, 4, 22)
-    for it in range(max_iter):
-        J = jac(m, f)
-        JW = J * Wd[:, None]
-        dhat = (d - f + J @ m) * Wd
-        JtJ = JW.T @ JW
-        Jtd = JW.T @ dhat
-        cands = []
-        for lam in lambdas:
-            try:
-                mn = np.linalg.solve(JtJ + lam * RtR, Jtd)
-            except np.linalg.LinAlgError:
-                continue
-            mn = np.clip(mn, -3, 6)
-            fn = fwd(mn)
-            cands.append((rms_of(fn), lam, mn, fn))
-        if not cands:
-            break
-        best = min(cands, key=lambda c: c[0])
-        if best[0] < target_rms:
-            # фаза 2: самая гладкая модель, достигающая целевого RMS
-            ok_c = [c for c in cands if c[0] <= target_rms]
-            best = max(ok_c, key=lambda c: c[1])
-        new_rms, lam, mn, fn = best
-        if new_rms > rms * 0.999 and rms > target_rms:
-            # нет прогресса — делаем полшага
-            mh = 0.5 * (m + mn)
-            fh = fwd(mh)
-            if rms_of(fh) < rms:
-                mn, fn, new_rms = mh, fh, rms_of(fh)
-            else:
-                break
-        rough_old = np.sum((R @ m) ** 2)
-        rough_new = np.sum((R @ mn) ** 2)
-        m, f, prev = mn, fn, rms
-        rms = new_rms
-        history.append(rms)
-        if progress:
-            progress(it + 1, rms)
-        if rms <= target_rms and prev <= target_rms and abs(rough_new - rough_old) < 1e-3 * max(rough_old, 1e-9):
-            break
+    m, rms, history = occam_core(fwd, d, Wd, np.full(M, np.log10(rmed)), roughness(M),
+                                 max_iter=max_iter, target_rms=target_rms, progress=progress)
 
     r_pred, p_pred = rho_phase_1d(10 ** m, thick, freq)
     return Occam1DResult(tops, 10 ** m, freq, rho_a, phase, erho, ephs, r_pred, p_pred,

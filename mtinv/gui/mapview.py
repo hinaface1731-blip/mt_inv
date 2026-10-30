@@ -192,17 +192,20 @@ class MapTab(QtWidgets.QWidget):
         fig.clear()
         self.ax = ax = fig.add_subplot(111)
         sts = [s for s in self.main.stations.values() if np.isfinite(s.lat) and np.isfinite(s.lon)]
-        if not sts:
+        tem_pts = [t for t in self.main.tems.values() if np.isfinite(t.lat) and np.isfinite(t.lon)]
+        if not sts and not tem_pts:
             ax.text(0.5, 0.5, "Загрузите EDI (Файл → Открыть)", ha="center", transform=ax.transAxes)
             self.plot.draw()
             return
         lat = np.array([s.lat for s in sts])
         lon = np.array([s.lon for s in sts])
         x, y = tiles.merc(lat, lon)
-        span = max(x.max() - x.min(), y.max() - y.min(), 2000.0)
+        ax_x = np.r_[x, tiles.merc([t.lat for t in tem_pts], [t.lon for t in tem_pts])[0]]
+        ax_y = np.r_[y, tiles.merc([t.lat for t in tem_pts], [t.lon for t in tem_pts])[1]]
+        span = max(ax_x.max() - ax_x.min(), ax_y.max() - ax_y.min(), 2000.0)
         pad = 0.15 * span
-        xl = (x.min() - pad, x.max() + pad)
-        yl = (y.min() - pad, y.max() + pad)
+        xl = (ax_x.min() - pad, ax_x.max() + pad)
+        yl = (ax_y.min() - pad, ax_y.max() + pad)
         if view is not None:
             xl, yl = view
 
@@ -229,8 +232,24 @@ class MapTab(QtWidgets.QWidget):
             ax.annotate(p.name, (px[0], py[0]), color="magenta", fontsize=9, zorder=5,
                         xytext=(-5, 5), textcoords="offset points", ha="right")
 
+        # ЗСБ: синие квадраты, пунктир — привязка к МТ-станции
+        tems = [t for t in self.main.tems.values() if np.isfinite(t.lat) and np.isfinite(t.lon)]
+        if tems:
+            tx, ty = tiles.merc([t.lat for t in tems], [t.lon for t in tems])
+            for t, xi, yi in zip(tems, tx, ty):
+                st = self.main.stations.get(t.link)
+                if st is not None and np.isfinite(st.lat):
+                    sx, sy = tiles.merc(st.lat, st.lon)
+                    ax.plot([xi, sx], [yi, sy], ":", color="tab:blue", lw=1, zorder=3)
+            ax.scatter(tx, ty, marker="s", s=35, c="tab:cyan", edgecolors="tab:blue", zorder=4,
+                       label="ЗСБ")
+            if self.labels.isChecked():
+                for t, xi, yi in zip(tems, tx, ty):
+                    ax.annotate(t.name, (xi, yi), fontsize=6, color="tab:blue", xytext=(3, -8),
+                                textcoords="offset points", zorder=5)
+
         names = [s.name for s in sts]
-        sel = np.array([n in self.selected for n in names])
+        sel = np.array([n in self.selected for n in names], dtype=bool)
         ax.scatter(x[~sel], y[~sel], marker="v", s=50, c="white", edgecolors="black", zorder=4)
         if sel.any():
             ax.scatter(x[sel], y[sel], marker="v", s=70, c="red", edgecolors="black", zorder=4)
