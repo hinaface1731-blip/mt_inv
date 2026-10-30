@@ -147,12 +147,30 @@ def group_files(paths):
     return out, skipped
 
 
+POL_WINDOW = (80e-6, 300e-6)   # окно для определения полярности (знака процесса)
+
+
+def _polarity(t, v):
+    sel = (t >= POL_WINDOW[0]) & (t <= POL_WINDOW[1]) & np.isfinite(v)
+    if not sel.any():
+        sel = np.isfinite(v)
+    m = np.median(v[sel]) if sel.any() else 1.0
+    return -1.0 if m < 0 else 1.0
+
+
 def _stack(recs, scale):
-    """Медиана дублей и ошибка среднего (в единицах dB/dt/I)."""
+    """Медиана дублей и ошибка среднего (в единицах dB/dt/I).
+
+    Дубли с другим знаком процесса (перепутанная полярность) приводятся
+    к знаку большинства — как требует раздел «Дубли» в «ПРОБЕ».
+    """
     t = recs[0]["times"]
     V = np.array([r["values"] for r in recs if len(r["values"]) == len(t)])
     I = np.array([r["wi"] for r in recs if len(r["values"]) == len(t)])
     S = V / I[:, None] * scale
+    pol = np.array([_polarity(t, row) for row in S])
+    major = 1.0 if np.sum(pol > 0) >= np.sum(pol < 0) else -1.0
+    S = S * (pol * major)[:, None]
     med = np.median(S, axis=0)
     if len(S) > 1:
         err = np.std(S, axis=0, ddof=1) / np.sqrt(len(S))
@@ -230,21 +248,73 @@ def merge_currents(big, small, t_min=None, t_cross=None, snr_min=2.0, delay=0.0,
         valid = t >= (big_start if big is not None else small_start)
     info["t_cross"] = t_cross
 
-    # шум: |v| < snr_min*err; всё после первой «шумовой» точки — тоже в маску
+    # общий знак процесса: на 0.08–0.3 мс сигнал должен быть положительным
+    pol = _polarity(t, np.where(valid, v, np.nan))
+    if pol < 0:
+        v = -v
+    info["polarity_flipped"] = bool(pol < 0)
+
+    # шум: отдельные точки с |v| < snr_min*err исключаются по одной; поздний
+    # «хвост» отрезается после 3 шумных точек подряд (после максимума сигнал/шум)
     noisy = np.isfinite(e) & (np.abs(v) < snr_min * e)
     mask = ~valid.copy()
-    first_noise = np.where(noisy & valid)[0]
-    if len(first_noise):
-        mask[first_noise[0]:] = True
+    mask |= noisy
+    snr = np.where(np.isfinite(e) & (e > 0), np.abs(v) / np.where(e > 0, e, 1), np.inf)
+    good = valid & ~noisy
+    if good.any():
+        i0 = int(np.argmax(np.where(valid, np.minimum(snr, 1e6), -1)))
+        run = 0
+        for i in range(i0, len(t)):
+            run = run + 1 if (valid[i] and noisy[i]) else 0
+            if run >= 3:
+                mask[i - 2:] = True
+                break
     mask |= ~np.isfinite(v) | (v == 0)
+    info["late_sign_change"] = False
     return t, v, e, mask, info
 
 
-RX_MODES = {
-    "coil": "индукционный датчик ПДИ (точка), эквивалентная петля Lrc×Lrc",
-    "loop": "измерительная петля Lrc×Lrc на земле (усреднение по площади)",
-    "area": "Lrc — эффективная площадь датчика, м² (точка)",
-}
+def mask_sign_change(t, v, mask, info, central, e=None):
+    """Центральная установка: сигнал не должен менять знак.
+
+    Если знак меняется (ВП, суперпарамагнетизм, сбой режима, неточное
+    положение датчика), оставляется участок одного знака с наибольшим
+    суммарным lg(сигнал/шум) (а не просто самый длинный — шумный хвост),
+    остальное исключается; если он отрицательный — знак кривой меняется.
+    Возвращает (v, mask)."""
+    info["late_sign_change"] = False
+    info["sign_segment"] = None
+    if not central:
+        return v, mask
+    idx = np.where(~mask)[0]
+    if len(idx) == 0:
+        return v, mask
+    sg = np.sign(v[idx])
+    if e is not None:
+        ee = np.where(np.isfinite(e[idx]) & (e[idx] > 0), e[idx], np.nan)
+        w = np.log10(np.clip(np.abs(v[idx]) / ee, 1.0, 1e4))
+        w = np.where(np.isfinite(w), w, 1.0)
+    else:
+        w = np.ones(len(idx))
+    best, best_score = (0, 0), -1.0
+    start = 0
+    for i in range(1, len(idx) + 1):
+        if i == len(idx) or sg[i] != sg[start]:
+            score = float(np.sum(w[start:i]))
+            if score > best_score:
+                best, best_score = (start, i), score
+            start = i
+    keep = idx[best[0]:best[1]]
+    if len(keep) == len(idx):
+        return v, mask
+    new = np.ones_like(mask)
+    new[keep] = False
+    info["late_sign_change"] = True
+    info["sign_segment"] = (float(t[keep[0]]), float(t[keep[-1]]))
+    if sg[best[0]] < 0:
+        v = -v
+        info["polarity_flipped"] = not info.get("polarity_flipped", False)
+    return v, mask | new
 
 
 def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, snr_min=2.0,
@@ -282,6 +352,7 @@ def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, 
         small = _stack(g["м"], scale) if g.get("м") else None
         t, v, e, mask, info = merge_currents(big, small, t_min, t_cross, snr_min, r0["delay"],
                                              scale_small)
+        v, mask = mask_sign_change(t, v, mask, info, abs(r0["r"]) < 1e-6, e)
         ramps = None
         if ramp is None:
             def front(recs_):
