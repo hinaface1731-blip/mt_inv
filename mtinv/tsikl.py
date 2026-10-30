@@ -241,16 +241,20 @@ def merge_currents(big, small, t_min=None, t_cross=None, snr_min=2.0, delay=0.0,
 
 
 RX_MODES = {
-    "loop": "Lrc — сторона квадратной приёмной рамки, м (площадь = Lrc² × витки)",
-    "area": "Lrc — эффективная площадь датчика, м² (датчик — точка)",
+    "coil": "индукционный датчик ПДИ (точка), эквивалентная петля Lrc×Lrc",
+    "loop": "измерительная петля Lrc×Lrc на земле (усреднение по площади)",
+    "area": "Lrc — эффективная площадь датчика, м² (точка)",
 }
 
 
-def build_soundings(paths, units="mV", rx_turns=1.0, t_min=None, t_cross=None, snr_min=2.0,
-                    ramp=0.0, rx_mode="loop", scale_small=True):
+def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, snr_min=2.0,
+                    ramp=0.0, rx_mode="coil", scale_small=True):
     """Список TEMSounding из файлов *.pod (по одному на пикет) и список пропусков.
 
-    units — единицы ЭДС в файле (uV/mV/V); rx_mode — как понимать Lrc (RX_MODES).
+    units — единицы ЭДС в файле (uV/mV/V); rx_mode — как понимать Lrc (RX_MODES):
+    для датчиков ПДИ («Цикл») Lrc — сторона эквивалентной одновитковой петли
+    (ПДИ-50: 50×50 м при размере рамки 0.8 м), датчик считается точкой.
+    t_min — начальное время (ПДИ-50: 50 мкс; None — 2 × задержка из файла).
     ramp — длительность фронта выключения тока, с: None — из файла для каждого тока
     (2 × «Задержка коммутатора»), время при этом отсчитывается от середины фронта;
     0 — мгновенное выключение.
@@ -267,6 +271,9 @@ def build_soundings(paths, units="mV", rx_turns=1.0, t_min=None, t_cross=None, s
         if rx_mode == "area":
             rx_side = 0.0
             area = max(r0["lrc"], 1e-9) * rx_turns
+        elif rx_mode == "coil":
+            rx_side = 0.0
+            area = max(r0["lrc"], 1e-6) ** 2 * rx_turns
         else:
             rx_side = r0["lrc"]
             area = rx_side ** 2 * rx_turns if rx_side > 0 else rx_turns

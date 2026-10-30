@@ -81,7 +81,7 @@ def _auto_depths(mt, tem_d, tem_snd):
 
 
 def joint_inversion(mt=None, tem: TEMSounding | None = None, *, n_layers=45, z_first=None,
-                    z_max=None, rho0=None, floor_rho=0.10, floor_phs=2.9, floor_tem=0.05,
+                    z_max=None, rho0=None, floor_rho=0.10, floor_phs=2.9, floor_tem=0.10,
                     invert_ss=False, use_rho=True, use_phase=True, target_rms=1.0,
                     max_iter=30, progress=None, label="") -> JointResult:
     """mt — словарь из mt_data() или None; tem — TEMSounding или None."""
@@ -212,7 +212,9 @@ def static_shift_from_model(station, tops, rho, comp="xy", max_depth=None, min_p
     кривой меньше max_depth (часть разреза, надёжно освещённая ЗСБ).
     Возвращает dict: k (множитель ρa — то, что пишется в Station.ss),
     use (маска частот), rho_model, overlap (False — общих частот нет,
-    взяты самые высокие частоты АМТЗ).
+    взяты самые высокие частоты АМТЗ), spread (относительный разброс
+    отношения кривых на этих частотах), reliable (есть перекрытие и
+    разброс < 25 %: кривые отличаются только уровнем).
     """
     r_obs, _, _, _ = station.rho_phase(comp)
     if comp in ("xy", "xx"):
@@ -232,5 +234,9 @@ def static_shift_from_model(station, tops, rho, comp="xy", max_depth=None, min_p
         use[idx] = True
     if not use.any():
         raise ValueError("нет данных АМТЗ для сравнения")
-    k = float(10 ** np.median(np.log10(r_mod[use]) - np.log10(r_obs[use])))
-    return dict(k=k, use=use, rho_model=r_mod, overlap=overlap)
+    d = np.log10(r_mod[use]) - np.log10(r_obs[use])
+    k = float(10 ** np.median(d))
+    # разброс отношения: если формы кривых не совпадают, сдвиг ненадёжен
+    spread = float(10 ** (1.4826 * np.median(np.abs(d - np.median(d)))) - 1) if len(d) > 2 else 0.0
+    return dict(k=k, use=use, rho_model=r_mod, overlap=overlap, spread=spread,
+                reliable=bool(overlap and spread < 0.25))

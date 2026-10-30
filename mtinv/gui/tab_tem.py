@@ -93,8 +93,10 @@ class PodImportDialog(QtWidgets.QDialog):
         for k, t in RX_MODES.items():
             self.rx_mode.addItem(t, k)
         self.turns = dspin(0.01, 1e5, 1, 1, 2)
-        self.t_min = dspin(0, 10000, 0, 1, 1, " мкс")
+        self.t_min = dspin(0, 10000, 50, 1, 1, " мкс")
         self.t_min.setSpecialValueText("авто (2 × задержка из файла)")
+        self.t_min.setToolTip("Начальное время датчика: ПДИ-20 — 10 мкс, ПДИ-50 — 50 мкс, "
+                              "ПДИ-100 — 100 мкс, ПДИ-400 — 1 мс")
         self.t_cross = dspin(0, 100000, 0, 10, 1, " мкс")
         self.t_cross.setSpecialValueText("авто")
         self.snr = dspin(0.5, 100, 2, 0.5, 1)
@@ -119,6 +121,8 @@ class PodImportDialog(QtWidgets.QDialog):
                 if i >= 0:
                     w.setCurrentIndex(i)
             self.turns.setValue(prev.get("rx_turns", 1.0))
+            if prev.get("t_min") is not None:
+                self.t_min.setValue(prev["t_min"] * 1e6)
             self.snr.setValue(prev.get("snr_min", 2.0))
         bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
@@ -176,7 +180,7 @@ class TabTEM(QtWidgets.QWidget):
         f.addRow("Компонента АМТЗ:", self.comp)
         self.nlay = ispin(10, 120, 45)
         f.addRow("Число слоёв:", self.nlay)
-        self.ftem = dspin(0.5, 100, 5, 1, 1, " %")
+        self.ftem = dspin(0.5, 100, 10, 1, 1, " %")
         f.addRow("Мин. ошибка ЗСБ:", self.ftem)
         self.frho = dspin(1, 100, 10, 1, 0, " %")
         f.addRow("Мин. ошибка ρa:", self.frho)
@@ -430,10 +434,16 @@ class TabTEM(QtWidgets.QWidget):
         self.apply_btn.setEnabled(True)
         warn = "" if all(o["overlap"] for o in out.values()) else \
             "\n⚠ Нет общих частот: АМТЗ «видит» глубже ЗСБ, взяты 3 самые высокие частоты."
+        if any(o["spread"] >= 0.25 for o in out.values()):
+            warn += ("\n⚠ Формы кривых АМТЗ и модели ЗСБ на общих частотах не совпадают "
+                     "(разброс отношения > 25 %): сдвиг ненадёжен — возможны 3D-искажения "
+                     "или неточная модель ЗСБ.")
         self.info.setText(
             f"{st.name}: глубинность ЗСБ ≈ {doi:.0f} м\n"
-            f"поправка ρxy × {out['xy']['k']:.3f} (по {int(out['xy']['use'].sum())} частотам)\n"
-            f"поправка ρyx × {out['yx']['k']:.3f} (по {int(out['yx']['use'].sum())} частотам)"
+            f"поправка ρxy × {out['xy']['k']:.3f} (по {int(out['xy']['use'].sum())} частотам, "
+            f"разброс {100 * out['xy']['spread']:.0f} %)\n"
+            f"поправка ρyx × {out['yx']['k']:.3f} (по {int(out['yx']['use'].sum())} частотам, "
+            f"разброс {100 * out['yx']['spread']:.0f} %)"
             f"{warn}\nНажмите «Применить».")
         self.redraw()
 
@@ -487,11 +497,11 @@ class TabTEM(QtWidgets.QWidget):
                 self.results.setdefault(sname, {})["ЗСБ"] = r
                 st = self.main.stations[stname]
                 st.ss = np.array([k[0]["k"], k[1]["k"]])
-                flag = "" if k[0]["overlap"] and k[1]["overlap"] else " ⚠"
+                flag = "" if k[0]["reliable"] and k[1]["reliable"] else " ⚠"
                 lines.append(f"{stname}: ×{st.ss[0]:.2f} / ×{st.ss[1]:.2f}{flag}")
                 self.main.station_data_changed(stname)
             self.info.setText("Сдвиг применён (ρxy / ρyx):\n" + "\n".join(lines) +
-                              ("\n⚠ — нет общих частот, взяты высокие частоты АМТЗ"
+                              ("\n⚠ — сдвиг ненадёжен: нет общих частот или формы кривых не совпадают"
                                if any("⚠" in s for s in lines) else ""))
             self.redraw()
 

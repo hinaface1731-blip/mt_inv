@@ -37,7 +37,8 @@ def test_build_soundings_merge(tmp_path):
             v = np.minimum(true * wi * (1 + 0.01 * rng.normal(size=t.size)), sat)
             _write_pod(tmp_path / f"06-220{cur}_{dup}.pod", "220" + cur, wi, 0, t, v)
             _write_pod(tmp_path / f"06-225{cur}_2_{dup}.pod", "225" + cur, wi, 100, t, v)
-    snds, skipped = build_soundings(sorted(str(p) for p in tmp_path.iterdir()), units="uV")
+    snds, skipped = build_soundings(sorted(str(p) for p in tmp_path.iterdir()), units="uV",
+                                    rx_mode="loop", t_min=None)
     assert not skipped
     names = [s.name for s in snds]
     assert names == ["06-220", "06-225_2"]
@@ -85,3 +86,15 @@ def test_fast_kernel_jacobian():
         r2[j] *= 10 ** h
         fd = (K.dbdt(r2, th) - d) / h
         assert np.allclose(J[:, :, j], fd, rtol=1e-3, atol=1e-6 * np.abs(J).max())
+
+
+def test_coil_receiver_is_point_with_equivalent_area(tmp_path):
+    t = np.logspace(-2, 1, 30)
+    v = 1e3 * t ** -2.5
+    for dup in (1, 2):
+        _write_pod(tmp_path / f"06-220б_{dup}.pod", "220б", 16.0, 0, t, v * 16.0)
+    (s,), _ = build_soundings(sorted(str(p) for p in tmp_path.iterdir()), units="uV")
+    assert s.rx_side == 0                       # ПДИ — точечный датчик
+    ok = ~s.mask
+    assert s.times[ok].min() >= 50e-6           # начальное время ПДИ-50
+    assert np.allclose(s.signal[ok], np.interp(s.times[ok], t * 1e-3, v * 1e-6 / 2500), rtol=1e-6)
