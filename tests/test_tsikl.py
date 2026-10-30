@@ -106,6 +106,6 @@ def test_time_shift_between_currents_is_found():
     t = np.logspace(-4.5, -3, 40)
     f = lambda tt: 1e-6 * (tt / 1e-4) ** -2.5          # noqa: E731
     vb = f(t)
-    vs = 0.9 * f(t - 10e-6)        # малый ток «опережает» на 10 мкс
+    vs = 0.9 * f(t + 10e-6)        # кривая малого тока «опережает» на 10 мкс
     sh = estimate_time_shift(t, vb, vs, 50e-6)
     assert abs(sh - 10e-6) < 1.5e-6
