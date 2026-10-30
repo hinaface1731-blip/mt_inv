@@ -37,7 +37,7 @@ def test_build_soundings_merge(tmp_path):
             v = np.minimum(true * wi * (1 + 0.01 * rng.normal(size=t.size)), sat)
             _write_pod(tmp_path / f"06-220{cur}_{dup}.pod", "220" + cur, wi, 0, t, v)
             _write_pod(tmp_path / f"06-225{cur}_2_{dup}.pod", "225" + cur, wi, 100, t, v)
-    snds, skipped = build_soundings(sorted(str(p) for p in tmp_path.iterdir()))
+    snds, skipped = build_soundings(sorted(str(p) for p in tmp_path.iterdir()), units="uV")
     assert not skipped
     names = [s.name for s in snds]
     assert names == ["06-220", "06-225_2"]
@@ -48,6 +48,22 @@ def test_build_soundings_merge(tmp_path):
     expect = true * 1e-6 / 2500
     assert np.allclose(s.signal[ok], np.interp(s.times[ok], t * 1e-3, expect), rtol=0.05)
     assert s.raw["info"]["t_cross"] is not None
+
+
+def test_rho_tau_matches_proba_example():
+    """Пример из описания «ПРОБА-WIN»: A=200, lизм=80, I·W=43.3 А,
+    t=0.1 мс, ЭДС=3230 мВ -> Rotau=66.76 Ом·м."""
+    from mtinv.tem import rho_tau
+
+    sig = 3.230 / (80 * 80) / 43.3
+    assert abs(rho_tau([1e-4], [sig], 200 / np.sqrt(np.pi))[0] - 66.76) < 0.05
+
+
+def test_ramp_array_matches_scalar():
+    t = np.logspace(-4.5, -2.5, 6)
+    a = LoopTEMForward(t, 100.0, ramp=20e-6)([100.0], [])
+    b = LoopTEMForward(t, 100.0, ramp=np.full(6, 20e-6))([100.0], [])
+    assert np.allclose(a, b)
 
 
 def test_fast_kernel_matches_simpeg_loop():

@@ -57,6 +57,9 @@ class TEMSounding:
     offset: float = 0.0      # разнос: центр приёмника от центра петли, м
     offset_angle: float = 0.0  # направление разноса от оси X петли, град
     raw: dict = field(default_factory=dict)  # исходные кривые (для показа)
+    # длительность фронта выключения для каждого отсчёта (с); если задано,
+    # время отсчёта считается от середины фронта (как в аппаратуре «Цикл»)
+    ramps: np.ndarray | None = None
 
     def __post_init__(self):
         self.times = np.asarray(self.times, float)
@@ -68,6 +71,8 @@ class TEMSounding:
             self.mask = np.zeros(len(self.times), bool)
         else:
             self.mask = np.asarray(self.mask, bool)[o]
+        if self.ramps is not None:
+            self.ramps = np.asarray(self.ramps, float)[o]
 
     @property
     def tx_radius(self):
@@ -91,7 +96,8 @@ class TEMSounding:
     def halfspace_rho(self):
         """ρ однородного полупространства, лучше всего описывающего кривую
         (для любой геометрии, в т.ч. разноса). Кэшируется."""
-        key = (tuple(self.mask), self.tx_side, self.tx_b, self.rx_side, self.offset, self.ramp)
+        key = (tuple(self.mask), self.tx_side, self.tx_b, self.rx_side, self.offset, self.ramp,
+               None if self.ramps is None else tuple(self.ramps))
         if getattr(self, "_hs", (None,))[0] == key:
             return self._hs[1]
         ok = ~self.mask & np.isfinite(self.signal) & (self.signal != 0)
@@ -116,7 +122,7 @@ class TEMSounding:
     def depth_of_investigation(self, rho=None):
         """Глубина диффузии на самом позднем времени (оценка), м."""
         if rho is None:
-            if self.is_central and self.rx_side == 0:
+            if self.is_central:
                 rt = self.rho_tau()
                 ok = ~self.mask & (self.signal > 0)
                 late = ok & (self.times >= np.median(self.times[ok])) if ok.sum() > 3 else ok
@@ -194,7 +200,9 @@ class LoopTEMForward:
     """
 
     def __init__(self, times, tx_a, tx_b=None, rx_side=0.0, offset=0.0, angle=0.0,
-                 ramp=0.0, n_tx=8, n_rx=4):
+                 ramp=0.0, n_tx=8, n_rx=4, ramp_mid=False):
+        """ramp — длительность линейного выключения (число или массив по временам);
+        ramp_mid=True — время отсчитывается от середины фронта, иначе от конца."""
         from .tem_fast import VMDKernel
 
         self.times = np.asarray(times, float)
@@ -217,14 +225,19 @@ class LoopTEMForward:
         w = (WT.ravel()[:, None] * WR.ravel()[None, :]).ravel()
         d = np.maximum(d, 0.5)
 
-        # линейное выключение тока: среднее ступенчатого отклика по [t, t+ramp]
-        self.ramp = float(ramp)
-        if self.ramp > 0:
-            tq, wq = _gauss(6, 0.0, self.ramp)
-            t_eval = (self.times[:, None] + tq[None, :]).ravel()
+        # линейное выключение тока: dB/dt = среднее ступенчатого отклика по
+        # [t_end, t_end + ramp], где t_end — время от конца фронта
+        ramps = np.broadcast_to(np.asarray(ramp, float), self.times.shape)
+        self.ramp = ramps
+        if np.any(ramps > 0):
+            x, wx = np.polynomial.legendre.leggauss(6)
+            u, wu = 0.5 * (x + 1), 0.5 * wx                 # узлы на [0, 1]
+            t_end = self.times - (ramps / 2 if ramp_mid else 0.0)
+            t_end = np.maximum(t_end, 1e-7)
+            t_eval = (t_end[:, None] + u[None, :] * ramps[:, None]).ravel()
             R = np.zeros((len(self.times), len(t_eval)))
             for i in range(len(self.times)):
-                R[i, i * 6:(i + 1) * 6] = wq / self.ramp
+                R[i, i * 6:(i + 1) * 6] = wu
         else:
             t_eval = self.times
             R = None
@@ -256,9 +269,14 @@ class LoopTEMForward:
 def make_forward(snd: "TEMSounding", times=None):
     """Подходящая прямая задача для геометрии зондирования."""
     times = snd.times if times is None else times
-    simple = (snd.rx_side == 0 and snd.is_central and snd.tx_b in (0, snd.tx_side))
+    simple = (snd.rx_side == 0 and snd.is_central and snd.tx_b in (0, snd.tx_side)
+              and snd.ramps is None)
     if simple:
         return TEMForward(times, snd.tx_side, snd.config, snd.ramp)
+    if snd.ramps is not None:
+        ramp = np.interp(times, snd.times, snd.ramps)
+        return LoopTEMForward(times, snd.tx_side, snd.tx_b or snd.tx_side, snd.rx_side,
+                              snd.offset, snd.offset_angle, ramp, ramp_mid=True)
     return LoopTEMForward(times, snd.tx_side, snd.tx_b or snd.tx_side, snd.rx_side, snd.offset,
                           snd.offset_angle, snd.ramp)
 

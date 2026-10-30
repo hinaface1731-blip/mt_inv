@@ -87,7 +87,7 @@ class PodImportDialog(QtWidgets.QDialog):
             "кривые малого и большого тока нормируются на ток и сшиваются:\n"
             "ранние времена — малый ток, поздние — большой."))
         self.units = QtWidgets.QComboBox()
-        for k, t in [("uV", "мкВ"), ("mV", "мВ"), ("V", "В")]:
+        for k, t in [("mV", "мВ (формат ПОДБОР)"), ("uV", "мкВ"), ("V", "В")]:
             self.units.addItem(t, k)
         self.rx_mode = QtWidgets.QComboBox()
         for k, t in RX_MODES.items():
@@ -99,6 +99,11 @@ class PodImportDialog(QtWidgets.QDialog):
         self.t_cross.setSpecialValueText("авто")
         self.snr = dspin(0.5, 100, 2, 0.5, 1)
         self.ramp = dspin(0, 10000, 0, 1, 1, " мкс")
+        self.ramp_file = QtWidgets.QCheckBox("фронт выключения из файла, отдельно для каждого тока "
+                                             "(экспериментально)")
+        self.ramp_file.toggled.connect(lambda on: self.ramp.setEnabled(not on))
+        self.scale = QtWidgets.QCheckBox("приводить малый ток к большому (коэффициент сшивки, как «ПРОБА»)")
+        self.scale.setChecked(True)
         f.addRow("Единицы ЭДС в файле:", self.units)
         f.addRow("Приёмник (Lrc):", self.rx_mode)
         f.addRow("Витков приёмника:", self.turns)
@@ -106,6 +111,8 @@ class PodImportDialog(QtWidgets.QDialog):
         f.addRow("Стык малый/большой ток:", self.t_cross)
         f.addRow("Мин. сигнал/шум:", self.snr)
         f.addRow("Время выключения тока:", self.ramp)
+        f.addRow("", self.ramp_file)
+        f.addRow("", self.scale)
         if prev:
             for w, key in ((self.units, "units"), (self.rx_mode, "rx_mode")):
                 i = w.findData(prev.get(key))
@@ -123,7 +130,9 @@ class PodImportDialog(QtWidgets.QDialog):
                     rx_turns=self.turns.value(),
                     t_min=self.t_min.value() * 1e-6 or None,
                     t_cross=self.t_cross.value() * 1e-6 or None,
-                    snr_min=self.snr.value(), ramp=self.ramp.value() * 1e-6)
+                    snr_min=self.snr.value(),
+                    ramp=None if self.ramp_file.isChecked() else self.ramp.value() * 1e-6,
+                    scale_small=self.scale.isChecked())
 
 
 class TabTEM(QtWidgets.QWidget):
@@ -529,7 +538,7 @@ class TabTEM(QtWidgets.QWidget):
         tc = (snd.raw or {}).get("info", {}).get("t_cross")
         if tc:
             a_sig.axvline(tc * 1e3, color="gray", ls=":", lw=0.8)
-        central = snd.is_central and snd.rx_side == 0
+        central = snd.is_central   # ρτ «ПРОБЫ»: размер приёмной петли не учитывается
         if central:
             a_rt.plot(t[pos], snd.rho_tau()[pos], "s", ms=3, color="tab:green", label="ρτ набл.")
         for lab, r in res.items():

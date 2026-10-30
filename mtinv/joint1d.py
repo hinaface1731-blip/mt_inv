@@ -65,7 +65,7 @@ def tem_transform(obs, err, floor):
 def _auto_depths(mt, tem_d, tem_snd):
     zf, zm = [], []
     if tem_d is not None:
-        if tem_snd.is_central and tem_snd.rx_side == 0:
+        if tem_snd.is_central:
             rt = tem_snd.rho_tau()[~tem_snd.mask & (tem_snd.signal > 0)]
             rlo = max(float(np.nanpercentile(rt, 5)), 0.1)
             rhi = float(np.nanpercentile(rt, 95))
