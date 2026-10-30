@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 *.npz
 .pytest_cache/
+results*/
