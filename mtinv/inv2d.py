@@ -67,6 +67,53 @@ class Inv2DResult:
     core: tuple                   # xmin, xmax, zmin(depth max), 0
     settings: Inv2DSettings
     log: list = field(default_factory=list)
+    sens: np.ndarray | None = None  # чувствительность ячеек (0..1), воздух = nan
+
+    def doi_mask(self, threshold=0.01):
+        """True для ячеек ниже глубинности: относительная чувствительность меньше
+        threshold (по умолчанию 1 % от максимума)."""
+        if self.sens is None:
+            return np.zeros(self.mesh.n_cells, bool)
+        return ~(self.sens >= threshold)
+
+    def doi_depth(self, threshold=0.01):
+        """Глубинность для каждого столбца сетки (м): самая глубокая ячейка с
+        чувствительностью выше порога."""
+        if self.sens is None:
+            return None
+        nx, nz = self.mesh.shape_cells
+        S = self.sens.reshape((nx, nz), order="F")
+        zc = -self.mesh.cell_centers_y
+        out = np.zeros(nx)
+        for i in range(nx):
+            ok = (S[i] >= threshold) & (zc > 0)
+            out[i] = zc[ok].max() if ok.any() else 0.0
+        return out
+
+
+def cell_sensitivity(misfits, model, mesh, active):
+    """Нормированная чувствительность Σ|W·J| / площадь ячейки (по всем данным).
+
+    Сглаживается по соседним ячейкам и нормируется так, чтобы 1 = 99-й
+    процентиль; используется для оценки глубинности (ниже ~1 % модель
+    определяется регуляризацией, а не данными)."""
+    tot = np.zeros(int(active.sum()))
+    for mf in misfits:
+        J = mf.simulation.getJ(model)
+        W = mf.W.diagonal() if hasattr(mf.W, "diagonal") else np.ones(J.shape[0])
+        tot += np.abs(W[:, None] * J).sum(axis=0)
+    area = mesh.cell_volumes[active]
+    tot = tot / area
+    full = np.full(mesh.n_cells, np.nan)
+    full[active] = tot
+    S = full.reshape(mesh.shape_cells, order="F")
+    from scipy.ndimage import uniform_filter
+
+    Sf = uniform_filter(np.nan_to_num(S), size=3, mode="nearest")
+    Sf[~np.isfinite(S)] = np.nan
+    v = Sf[np.isfinite(Sf)]
+    ref = np.percentile(v, 99) if len(v) else 1.0
+    return (Sf / ref).reshape(-1, order="F")
 
 
 class StopInversion(Exception):
@@ -341,7 +388,13 @@ def run_inversion(stations, profile, s: Inv2DSettings, progress=None, stop_flag=
         pred[mode] = dict(rho=R, phs=P)
     final_rms = rms_of(m_rec)
     say(f"Готово. Итоговый RMS = {final_rms:.3f}")
-    return Inv2DResult(mesh, rho, data, pred, rms_hist, final_rms, core, s, logs)
+    sens = None
+    try:
+        say("Оценка глубинности (чувствительность ячеек)…")
+        sens = cell_sensitivity(misfits, m_rec, mesh, active)
+    except Exception as e:  # noqa: BLE001
+        say(f"Чувствительность не посчитана: {e}")
+    return Inv2DResult(mesh, rho, data, pred, rms_hist, final_rms, core, s, logs, sens)
 
 
 def forward_2d(mesh, rho_cells, x_st, freqs, modes=("te", "tm")):

@@ -148,12 +148,20 @@ class Tab2D(QtWidgets.QWidget):
         sec_ctl.addWidget(self.smooth)
         self.equal = QtWidgets.QCheckBox("1:1")
         sec_ctl.addWidget(self.equal)
+        self.doi = QtWidgets.QCheckBox("затенять ниже глубинности")
+        self.doi.setChecked(True)
+        self.doi.setToolTip("Ячейки, чувствительность которых к данным меньше порога, затеняются: "
+                            "там модель определяется регуляризацией, а не данными")
+        sec_ctl.addWidget(self.doi)
+        self.doi_thr = dspin(0.01, 50, 1.0, 0.5, 2, " %")
+        self.doi_thr.setToolTip("Порог относительной чувствительности")
+        sec_ctl.addWidget(self.doi_thr)
         sec_ctl.addStretch(1)
         for w in (self.cmap,):
             w.currentIndexChanged.connect(self.draw_section)
-        for w in (self.vmin, self.vmax, self.zplot):
+        for w in (self.vmin, self.vmax, self.zplot, self.doi_thr):
             w.valueChanged.connect(self.draw_section)
-        for w in (self.smooth, self.equal):
+        for w in (self.smooth, self.equal, self.doi):
             w.toggled.connect(self.draw_section)
         secw = QtWidgets.QWidget()
         sl = QtWidgets.QVBoxLayout(secw)
@@ -328,6 +336,10 @@ class Tab2D(QtWidgets.QWidget):
         R = res.rho.reshape(m.shape_cells, order="F")
         x0, x1, zc, _ = res.core
         zmax = self.zplot.value() * 1000 or -zc
+        if not self.zplot.value() and self.doi.isChecked() and getattr(res, "sens", None) is not None:
+            dd = res.doi_depth(self.doi_thr.value() / 100)
+            if dd is not None and dd.max() > 0:
+                zmax = min(-zc, 1.3 * float(np.percentile(dd[dd > 0], 90)))
         ix = np.where((m.cell_centers_x >= x0) & (m.cell_centers_x <= x1))[0]
         iz = np.where((m.cell_centers_y < 0) & (m.cell_centers_y >= -zmax * 1.05))[0]
         sub = R[np.ix_(ix, iz)].T
@@ -344,6 +356,18 @@ class Tab2D(QtWidgets.QWidget):
             ze = -m.nodes_y[iz[0]:iz[-1] + 2] / 1000
             im = ax.pcolormesh(xe, ze, sub, norm=norm, cmap=cmap)
         fig.colorbar(im, ax=ax, label="ρ, Ом·м", shrink=0.9)
+        if self.doi.isChecked() and getattr(res, "sens", None) is not None:
+            thr = self.doi_thr.value() / 100
+            Sm = res.sens.reshape(m.shape_cells, order="F")[np.ix_(ix, iz)].T
+            shade = np.where(np.nan_to_num(Sm) < thr, 1.0, np.nan)
+            xe = m.nodes_x[ix[0]:ix[-1] + 2] / 1000
+            ze = -m.nodes_y[iz[0]:iz[-1] + 2] / 1000
+            ax.pcolormesh(xe, ze, shade, cmap="Greys", vmin=0, vmax=1.4, alpha=0.75, zorder=3)
+            dd = res.doi_depth(thr)
+            if dd is not None:
+                ax.plot(m.cell_centers_x[ix] / 1000, dd[ix] / 1000, "k--", lw=1, zorder=4,
+                        label=f"глубинность (чувств. {self.doi_thr.value():g} %)")
+                ax.legend(loc="lower right", fontsize=8)
         xs = res.data.x / 1000
         ax.plot(xs, np.zeros_like(xs), "kv", ms=7, clip_on=False, zorder=5)
         for x, n in zip(xs, res.data.names):
@@ -482,6 +506,8 @@ class Tab2D(QtWidgets.QWidget):
                  x=res.data.x, freqs=res.data.freqs, names=np.array(res.data.names),
                  core=np.array(res.core), rms=res.rms, rms_hist=np.array(res.rms_history),
                  settings=json.dumps(res.settings.to_dict()))
+        if getattr(res, "sens", None) is not None:
+            d["sens"] = res.sens
         for mode in res.pred:
             for k, v in res.data.obs[mode].items():
                 d[f"obs_{mode}_{k}"] = v
@@ -518,5 +544,5 @@ def load_npz(path):
             data.obs[mode] = {k: z[f"obs_{mode}_{k}"] for k in ("rho", "phs", "erho", "ephs")}
             pred[mode] = {k: z[f"pred_{mode}_{k}"] for k in ("rho", "phs")}
     return Inv2DResult(mesh, z["rho"], data, pred, list(z["rms_hist"]), float(z["rms"]),
-                       tuple(z["core"]), s)
+                       tuple(z["core"]), s, sens=z["sens"] if "sens" in z else None)
 
