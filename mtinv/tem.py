@@ -42,9 +42,9 @@ class TEMSounding:
     lat: float
     lon: float
     times: np.ndarray        # с, после выключения тока
-    signal: np.ndarray       # |dBz/dt|/I, Тл/(с·А)
+    signal: np.ndarray       # dBz/dt / I, Тл/(с·А); со знаком (вне петли бывает < 0)
     err: np.ndarray          # стд. ошибка в тех же единицах (nan = нет)
-    tx_side: float = 100.0   # сторона квадратной генераторной петли, м
+    tx_side: float = 100.0   # сторона генераторной петли (X), м
     config: str = "central"
     ramp: float = 0.0        # длительность линейного выключения тока, с
     elev: float = 0.0
@@ -52,10 +52,15 @@ class TEMSounding:
     link: str = ""           # имя привязанной МТ-станции
     mask: np.ndarray = field(default=None)
     opts: dict = field(default_factory=dict)  # параметры импорта (для проекта)
+    tx_b: float = 0.0        # вторая сторона петли (0 = квадрат)
+    rx_side: float = 0.0     # сторона приёмной рамки (0 = точечный датчик)
+    offset: float = 0.0      # разнос: центр приёмника от центра петли, м
+    offset_angle: float = 0.0  # направление разноса от оси X петли, град
+    raw: dict = field(default_factory=dict)  # исходные кривые (для показа)
 
     def __post_init__(self):
         self.times = np.asarray(self.times, float)
-        self.signal = np.abs(np.asarray(self.signal, float))
+        self.signal = np.asarray(self.signal, float)
         self.err = np.asarray(self.err, float)
         o = np.argsort(self.times)
         self.times, self.signal, self.err = self.times[o], self.signal[o], self.err[o]
@@ -67,15 +72,57 @@ class TEMSounding:
     @property
     def tx_radius(self):
         """Радиус круглой петли той же площади."""
-        return self.tx_side / np.sqrt(np.pi)
+        return np.sqrt(self.tx_side * (self.tx_b or self.tx_side) / np.pi)
+
+    @property
+    def is_central(self):
+        return abs(self.offset) < 1e-6
+
+    @property
+    def geometry_text(self):
+        tx = f"{self.tx_side:g}×{self.tx_b or self.tx_side:g} м"
+        rx = f", рамка {self.rx_side:g} м" if self.rx_side else ""
+        pos = "центр" if self.is_central else f"разнос {self.offset:g} м"
+        return f"петля {tx}{rx}, {pos}"
 
     def rho_tau(self, signal=None):
         return rho_tau(self.times, self.signal if signal is None else signal, self.tx_radius)
 
+    def halfspace_rho(self):
+        """ρ однородного полупространства, лучше всего описывающего кривую
+        (для любой геометрии, в т.ч. разноса). Кэшируется."""
+        key = (tuple(self.mask), self.tx_side, self.tx_b, self.rx_side, self.offset, self.ramp)
+        if getattr(self, "_hs", (None,))[0] == key:
+            return self._hs[1]
+        ok = ~self.mask & np.isfinite(self.signal) & (self.signal != 0)
+        if ok.sum() < 2:
+            return 100.0
+        fwd = make_forward(self, self.times[ok])
+        obs = self.signal[ok]
+        s0 = np.median(np.abs(obs)) * 1e-3
+
+        def misfit(lr):
+            p = fwd([10 ** lr], [])
+            return float(np.sum((np.arcsinh(p / s0) - np.arcsinh(obs / s0)) ** 2))
+
+        grid = np.linspace(-1, 5, 25)
+        vals = [misfit(g) for g in grid]
+        i = int(np.argmin(vals))
+        fine = np.linspace(grid[max(i - 1, 0)], grid[min(i + 1, len(grid) - 1)], 9)
+        best = fine[int(np.argmin([misfit(g) for g in fine]))]
+        self._hs = (key, float(10 ** best))
+        return self._hs[1]
+
     def depth_of_investigation(self, rho=None):
         """Глубина диффузии на самом позднем времени (оценка), м."""
-        rt = self.rho_tau()
-        rho = float(np.nanmedian(rt[~self.mask])) if rho is None else rho
+        if rho is None:
+            if self.is_central and self.rx_side == 0:
+                rt = self.rho_tau()
+                ok = ~self.mask & (self.signal > 0)
+                late = ok & (self.times >= np.median(self.times[ok])) if ok.sum() > 3 else ok
+                rho = float(np.nanmedian(rt[late if late.any() else ~self.mask]))
+            else:
+                rho = self.halfspace_rho()
         return float(np.sqrt(2 * self.times[~self.mask].max() * rho / MU0))
 
 
@@ -128,6 +175,92 @@ class TEMForward:
             sigmaMap=maps.IdentityMap(nP=len(rho)))
         d = sim.dpred(1.0 / rho).reshape(len(self.radii), len(self.times))
         return np.abs(self.weights @ d)
+
+
+def _gauss(n, a, b):
+    x, w = np.polynomial.legendre.leggauss(n)
+    return 0.5 * (b - a) * x + 0.5 * (a + b), 0.5 * (b - a) * w
+
+
+class LoopTEMForward:
+    """Прямоугольная генераторная петля, приёмная рамка конечного размера,
+    любой разнос (в т.ч. за петлёй).
+
+    Петля представлена равномерным слоем вертикальных магнитных диполей
+    (квадратуры Гаусса по площади), рамка — усреднением dBz/dt по её площади.
+    Отклик диполя считается быстрым ядром (tem_fast.VMDKernel) на сетке
+    разносов и интерполируется. Результат — dBz/dt на 1 А, со знаком
+    (внутри петли на поздних временах > 0). Есть аналитический якобиан.
+    """
+
+    def __init__(self, times, tx_a, tx_b=None, rx_side=0.0, offset=0.0, angle=0.0,
+                 ramp=0.0, n_tx=8, n_rx=4):
+        from .tem_fast import VMDKernel
+
+        self.times = np.asarray(times, float)
+        tx_b = tx_b or tx_a
+        xt, wxt = _gauss(n_tx, -tx_a / 2, tx_a / 2)
+        yt, wyt = _gauss(n_tx, -tx_b / 2, tx_b / 2)
+        XT, YT = np.meshgrid(xt, yt)
+        WT = np.outer(wyt, wxt)                       # сумма = площадь петли
+        ox = offset * np.cos(np.deg2rad(angle))
+        oy = offset * np.sin(np.deg2rad(angle))
+        if rx_side > 0:
+            xr, wxr = _gauss(n_rx, ox - rx_side / 2, ox + rx_side / 2)
+            yr, wyr = _gauss(n_rx, oy - rx_side / 2, oy + rx_side / 2)
+            XR, YR = np.meshgrid(xr, yr)
+            WR = np.outer(wyr, wxr) / rx_side ** 2   # среднее по рамке
+        else:
+            XR, YR, WR = np.array([[ox]]), np.array([[oy]]), np.array([[1.0]])
+        d = np.hypot(XT.ravel()[:, None] - XR.ravel()[None, :],
+                     YT.ravel()[:, None] - YR.ravel()[None, :]).ravel()
+        w = (WT.ravel()[:, None] * WR.ravel()[None, :]).ravel()
+        d = np.maximum(d, 0.5)
+
+        # линейное выключение тока: среднее ступенчатого отклика по [t, t+ramp]
+        self.ramp = float(ramp)
+        if self.ramp > 0:
+            tq, wq = _gauss(6, 0.0, self.ramp)
+            t_eval = (self.times[:, None] + tq[None, :]).ravel()
+            R = np.zeros((len(self.times), len(t_eval)))
+            for i in range(len(self.times)):
+                R[i, i * 6:(i + 1) * 6] = wq / self.ramp
+        else:
+            t_eval = self.times
+            R = None
+        self.R = R
+        self.kernel = VMDKernel(d.min() * 0.99, d.max() * 1.01, t_eval)
+        lg = np.log(self.kernel.r)
+        ld = np.log(d)
+        j = np.clip(np.searchsorted(lg, ld) - 1, 0, len(lg) - 2)
+        f = (ld - lg[j]) / (lg[j + 1] - lg[j])
+        P = np.zeros((len(ld), len(lg)))
+        P[np.arange(len(j)), j] = 1 - f
+        P[np.arange(len(j)), j + 1] = f
+        self.v = w @ P                                 # веса на сетке разносов
+
+    def __call__(self, rho, thick):
+        out = self.kernel.dbdt(rho, thick) @ self.v
+        return self.R @ out if self.R is not None else out
+
+    def jac(self, rho, thick):
+        """(отклик, d отклик / d log10 ρ слоёв)."""
+        d, J = self.kernel.dbdt_jac(rho, thick)
+        out = d @ self.v
+        Jo = np.einsum("trj,r->tj", J, self.v)
+        if self.R is not None:
+            out, Jo = self.R @ out, self.R @ Jo
+        return out, Jo
+
+
+def make_forward(snd: "TEMSounding", times=None):
+    """Подходящая прямая задача для геометрии зондирования."""
+    times = snd.times if times is None else times
+    simple = (snd.rx_side == 0 and snd.is_central and snd.tx_b in (0, snd.tx_side))
+    if simple:
+        return TEMForward(times, snd.tx_side, snd.config, snd.ramp)
+    return LoopTEMForward(times, snd.tx_side, snd.tx_b or snd.tx_side, snd.rx_side, snd.offset,
+                          snd.offset_angle, snd.ramp)
 
 
 # ----------------------------------------------------------------------

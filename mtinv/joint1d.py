@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .inv1d import MU0, bostick, layer_mesh, occam_core, rho_phase_1d, roughness
-from .tem import TEMForward, TEMSounding
+from .tem import TEMSounding, make_forward
 
 
 @dataclass
@@ -45,16 +45,33 @@ def mt_data(station, comp="det", rot=0.0):
 
 
 def tem_data(snd: TEMSounding):
-    ok = ~snd.mask & np.isfinite(snd.signal) & (snd.signal > 0)
+    ok = ~snd.mask & np.isfinite(snd.signal) & (snd.signal != 0)
     return dict(times=snd.times[ok], obs=snd.signal[ok], err=snd.err[ok])
+
+
+def tem_transform(obs, err, floor):
+    """Данные ЗСБ со знаком -> asinh(v/s0); при |v| >> s0 это ln(2|v|/s0)·sign(v),
+    т.е. обычная подгонка в логарифмах с относительной ошибкой.
+    Возвращает (функция преобразования, данные, ошибки в новом масштабе, s0)."""
+    sd = np.maximum(np.where(np.isfinite(err), err, 0.0), floor * np.abs(obs))
+    s0 = max(float(np.min(sd)) * 0.5, 1e-30)
+
+    def tr(v):
+        return np.arcsinh(v / s0)
+
+    return tr, tr(obs), sd / np.sqrt(s0 ** 2 + obs ** 2), s0
 
 
 def _auto_depths(mt, tem_d, tem_snd):
     zf, zm = [], []
     if tem_d is not None:
-        rt = tem_snd.rho_tau()[~tem_snd.mask]
-        rlo = max(float(np.nanpercentile(rt, 5)), 0.1)
-        rhi = float(np.nanpercentile(rt, 95))
+        if tem_snd.is_central and tem_snd.rx_side == 0:
+            rt = tem_snd.rho_tau()[~tem_snd.mask & (tem_snd.signal > 0)]
+            rlo = max(float(np.nanpercentile(rt, 5)), 0.1)
+            rhi = float(np.nanpercentile(rt, 95))
+        else:
+            hs = tem_snd.halfspace_rho()
+            rlo, rhi = hs / 10, hs * 3
         zf.append(0.4 * np.sqrt(2 * tem_d["times"].min() * rlo / MU0))
         zm.append(4.0 * np.sqrt(2 * tem_d["times"].max() * rhi / MU0))
     if mt is not None:
@@ -91,10 +108,10 @@ def joint_inversion(mt=None, tem: TEMSounding | None = None, *, n_layers=45, z_f
             sd.append(np.maximum(mt["ephs"], floor_phs))
     fwd_tem = None
     if td is not None:
-        rel = np.where(np.isfinite(td["err"]), td["err"] / td["obs"], 0.0)
-        d.append(np.log10(td["obs"]))
-        sd.append(np.maximum(rel, floor_tem) / np.log(10))
-        fwd_tem = TEMForward(td["times"], tem.tx_side, tem.config, tem.ramp)
+        tr, dt, st, tem_s0 = tem_transform(td["obs"], td["err"], floor_tem)
+        d.append(dt)
+        sd.append(st)
+        fwd_tem = make_forward(tem, td["times"])
     d = np.concatenate(d)
     Wd = 1.0 / np.concatenate(sd)
     n_mt = (len(mt["freq"]) * (int(use_rho) + int(use_phase))) if mt is not None else 0
@@ -113,7 +130,7 @@ def joint_inversion(mt=None, tem: TEMSounding | None = None, *, n_layers=45, z_f
             if use_phase:
                 out.append(p)
         if fwd_tem is not None:
-            out.append(np.log10(np.maximum(fwd_tem(rho, thick), 1e-300)))
+            out.append(tr(fwd_tem(rho, thick)))
         return np.concatenate(out)
 
     if rho0 is None:
@@ -121,8 +138,40 @@ def joint_inversion(mt=None, tem: TEMSounding | None = None, *, n_layers=45, z_f
         if mt is not None:
             vals.append(np.median(mt["rho"]))
         if td is not None:
-            vals.append(np.median(tem.rho_tau()[~tem.mask]))
+            vals.append(tem.halfspace_rho())
         rho0 = float(np.exp(np.mean(np.log(vals))))
+    jac_fn = None
+    if fwd_tem is not None and hasattr(fwd_tem, "jac"):
+        # аналитический якобиан ЗСБ, АМТЗ — конечными разностями (дёшево)
+        def jac_fn(m, f0):
+            lr, lss = split(m)
+            J = np.zeros((len(d), len(m)))
+            k = 0
+            if mt is not None:
+                h = 0.01
+
+                def fmt(lr_):
+                    r, p = rho_phase_1d(10 ** lr_, thick, mt["freq"])
+                    out = []
+                    if use_rho:
+                        out.append(np.log10(r) - lss)
+                    if use_phase:
+                        out.append(p)
+                    return np.concatenate(out)
+
+                f_mt = f0[:n_mt]
+                for i in range(n_layers):
+                    mm = lr.copy()
+                    mm[i] += h
+                    J[:n_mt, i] = (fmt(mm) - f_mt) / h
+                if invert_ss and use_rho:
+                    J[:len(mt["freq"]), n_layers] = -1.0
+                k = n_mt
+            val, Jt = fwd_tem.jac(10 ** lr, thick)
+            dtr = 1.0 / np.sqrt(tem_s0 ** 2 + val ** 2)
+            J[k:, :n_layers] = Jt * dtr[:, None]
+            return J
+
     m0 = np.full(n_layers, np.log10(rho0))
     lo, hi = np.full(n_layers, -3.0), np.full(n_layers, 6.0)
     if invert_ss:
@@ -130,7 +179,7 @@ def joint_inversion(mt=None, tem: TEMSounding | None = None, *, n_layers=45, z_f
         lo, hi = np.r_[lo, -1.5], np.r_[hi, 1.5]
     R = roughness(n_layers, 1 if invert_ss else 0, w_extra=0.05)
     m, rms, hist = occam_core(fwd, d, Wd, m0, R, max_iter=max_iter, target_rms=target_rms,
-                              lo=lo, hi=hi, progress=progress)
+                              lo=lo, hi=hi, progress=progress, jac_fn=jac_fn)
 
     lr, lss = split(m)
     rho = 10 ** lr

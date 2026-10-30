@@ -13,6 +13,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .. import __version__
 from ..edi import read_edi, write_edi
 from ..tem import read_tem
+from ..tsikl import build_soundings
 from ..profile import Profile
 from .common import error_box
 from .curves import CurvesTab
@@ -187,14 +188,31 @@ class MainWindow(QtWidgets.QMainWindow):
         if cur is not None and cur.name == name:
             self._on_current(self.list.currentItem(), None)
 
+    def load_pod_paths(self, paths, params, extra=None):
+        """Файлы «Цикла»: группировка по пикетам, сшивка токов."""
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            snds, skipped = build_soundings(paths, **params)
+        except Exception as e:  # noqa: BLE001
+            QtWidgets.QApplication.restoreOverrideCursor()
+            error_box(self, "Ошибка чтения *.pod", str(e))
+            return
+        QtWidgets.QApplication.restoreOverrideCursor()
+        self._add_tems(snds, skipped, extra)
+
     def load_tem_paths(self, paths, defaults=None, extra=None):
         errors = []
+        snds = []
         for p in paths:
             try:
-                snd = read_tem(p, defaults)
+                snds.append(read_tem(p, defaults))
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{os.path.basename(p)}: {e}")
-                continue
+        self._add_tems(snds, errors, extra)
+
+    def _add_tems(self, snds, errors, extra):
+        for snd in snds:
+            p = snd.path
             if extra and p in extra:
                 x = extra[p]
                 snd.link = x.get("link", snd.link)
@@ -215,7 +233,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if errors:
             error_box(self, "Не все файлы ЗСБ прочитаны",
                       f"Ошибок: {len(errors)}\n\n" + "\n".join(errors))
-        if paths and not errors and extra is None:
+        if snds and extra is None:
             self.tabs.setCurrentWidget(self.tabtem)
 
     def _stations_changed(self):
@@ -342,9 +360,23 @@ class MainWindow(QtWidgets.QMainWindow):
             groups.setdefault(json.dumps(t.get("opts", {}), sort_keys=True), []).append(p)
         for key, ps in groups.items():
             opts = json.loads(key)
+            if opts.get("format") == "pod":
+                continue
             for k in ("name", "lat", "lon", "elev", "link"):
                 opts.pop(k, None)
             self.load_tem_paths(ps, opts, extra)
+        # «Цикл»: пересобираем по исходным файлам с теми же параметрами
+        pod_groups = {}
+        for t in d.get("tems", []):
+            o = t.get("opts", {})
+            if o.get("format") != "pod":
+                continue
+            prm = {k: o.get(k) for k in ("units", "rx_turns", "t_min", "t_cross", "snr_min",
+                                         "ramp", "rx_mode") if k in o}
+            pod_groups.setdefault(json.dumps(prm, sort_keys=True), []).extend(
+                fix(f) for f in o.get("files", []))
+        for key, files in pod_groups.items():
+            self.load_pod_paths(files, json.loads(key), extra)
         self.profiles = [Profile.from_dict(p) for p in d.get("profiles", [])]
         self._profiles_changed()
         self.map.redraw()

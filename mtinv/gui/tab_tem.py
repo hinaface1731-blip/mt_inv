@@ -12,6 +12,7 @@ from PySide6 import QtCore, QtWidgets
 from ..joint1d import joint_inversion, mt_data, static_shift_from_model
 from ..profile import to_local
 from ..tem import CONFIGS, SIGNAL_UNITS, read_tem_header
+from ..tsikl import RX_MODES
 from .common import MplWidget, dspin, error_box, ispin, start_worker
 
 COMPS = [("det", "Det (инвариант)"), ("xy", "XY"), ("yx", "YX"), ("ssq", "SSQ"),
@@ -74,6 +75,57 @@ class TEMImportDialog(QtWidgets.QDialog):
                     rx_area=self.area.value(), ramp_us=self.ramp.value())
 
 
+class PodImportDialog(QtWidgets.QDialog):
+    """Параметры обработки файлов «Цикла» (*.pod)."""
+
+    def __init__(self, parent, n_files, prev=None):
+        super().__init__(parent)
+        self.setWindowTitle("Импорт ЗСБ «Цикл» (*.pod)")
+        f = QtWidgets.QFormLayout(self)
+        f.addRow(QtWidgets.QLabel(
+            f"Файлов: {n_files}. Дубли одного пикета и тока складываются (медиана),\n"
+            "кривые малого и большого тока нормируются на ток и сшиваются:\n"
+            "ранние времена — малый ток, поздние — большой."))
+        self.units = QtWidgets.QComboBox()
+        for k, t in [("uV", "мкВ"), ("mV", "мВ"), ("V", "В")]:
+            self.units.addItem(t, k)
+        self.rx_mode = QtWidgets.QComboBox()
+        for k, t in RX_MODES.items():
+            self.rx_mode.addItem(t, k)
+        self.turns = dspin(0.01, 1e5, 1, 1, 2)
+        self.t_min = dspin(0, 10000, 0, 1, 1, " мкс")
+        self.t_min.setSpecialValueText("авто (2 × задержка из файла)")
+        self.t_cross = dspin(0, 100000, 0, 10, 1, " мкс")
+        self.t_cross.setSpecialValueText("авто")
+        self.snr = dspin(0.5, 100, 2, 0.5, 1)
+        self.ramp = dspin(0, 10000, 0, 1, 1, " мкс")
+        f.addRow("Единицы ЭДС в файле:", self.units)
+        f.addRow("Приёмник (Lrc):", self.rx_mode)
+        f.addRow("Витков приёмника:", self.turns)
+        f.addRow("Отбросить времена до:", self.t_min)
+        f.addRow("Стык малый/большой ток:", self.t_cross)
+        f.addRow("Мин. сигнал/шум:", self.snr)
+        f.addRow("Время выключения тока:", self.ramp)
+        if prev:
+            for w, key in ((self.units, "units"), (self.rx_mode, "rx_mode")):
+                i = w.findData(prev.get(key))
+                if i >= 0:
+                    w.setCurrentIndex(i)
+            self.turns.setValue(prev.get("rx_turns", 1.0))
+            self.snr.setValue(prev.get("snr_min", 2.0))
+        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        f.addRow(bb)
+
+    def values(self):
+        return dict(units=self.units.currentData(), rx_mode=self.rx_mode.currentData(),
+                    rx_turns=self.turns.value(),
+                    t_min=self.t_min.value() * 1e-6 or None,
+                    t_cross=self.t_cross.value() * 1e-6 or None,
+                    snr_min=self.snr.value(), ramp=self.ramp.value() * 1e-6)
+
+
 class TabTEM(QtWidgets.QWidget):
     def __init__(self, main):
         super().__init__()
@@ -83,8 +135,11 @@ class TabTEM(QtWidgets.QWidget):
         self.plot = MplWidget(self)
 
         left = QtWidgets.QVBoxLayout()
-        b = QtWidgets.QPushButton("📂 Загрузить ЗСБ…")
+        b = QtWidgets.QPushButton("📂 Загрузить ЗСБ (файлы)…")
         b.clicked.connect(self.load_files)
+        left.addWidget(b)
+        b = QtWidgets.QPushButton("📁 Папка «Цикл» (*.pod)…")
+        b.clicked.connect(self.load_pod_folder)
         left.addWidget(b)
         left.addWidget(QtWidgets.QLabel("Зондирования ЗСБ → МТ-станция:"))
         self.list = QtWidgets.QListWidget()
@@ -237,14 +292,50 @@ class TabTEM(QtWidgets.QWidget):
     def load_files(self):
         start = self.main.settings.value("last_dir_tem", self.main.settings.value("last_dir", ""))
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
-            self, "Открыть данные ЗСБ", start, "Текст (*.txt *.dat *.csv *.tem *.zsb);;Все файлы (*)")
+            self, "Открыть данные ЗСБ", start,
+            "ЗСБ (*.pod *.POD *.txt *.dat *.csv *.tem *.zsb);;«Цикл» (*.pod *.POD);;Все файлы (*)")
         if not paths:
             return
         self.main.settings.setValue("last_dir_tem", os.path.dirname(paths[0]))
+        pods = [p for p in paths if p.lower().endswith(".pod")]
+        if pods:
+            self._import_pods(pods)
+            paths = [p for p in paths if p not in pods]
+            if not paths:
+                return
         dlg = TEMImportDialog(self, read_tem_header(paths[0]))
         if dlg.exec() != QtWidgets.QDialog.Accepted:
             return
         self.main.load_tem_paths(paths, dlg.values())
+
+    def load_pod_folder(self):
+        start = self.main.settings.value("last_dir_tem", self.main.settings.value("last_dir", ""))
+        d = QtWidgets.QFileDialog.getExistingDirectory(self, "Папка с файлами «Цикла»", start)
+        if not d:
+            return
+        self.main.settings.setValue("last_dir_tem", d)
+        import glob
+
+        paths = sorted(set(glob.glob(os.path.join(d, "**", "*.pod"), recursive=True)
+                           + glob.glob(os.path.join(d, "**", "*.POD"), recursive=True)))
+        if not paths:
+            QtWidgets.QMessageBox.information(self, "ЗСБ", "В папке нет файлов *.pod")
+            return
+        self._import_pods(paths)
+
+    def _import_pods(self, paths):
+        import json
+
+        try:
+            prev = json.loads(self.main.settings.value("pod_params", "") or "null")
+        except (TypeError, ValueError):
+            prev = None
+        dlg = PodImportDialog(self, len(paths), prev if isinstance(prev, dict) else None)
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+        prm = dlg.values()
+        self.main.settings.setValue("pod_params", json.dumps(prm))
+        self.main.load_pod_paths(paths, prm)
 
     # ------------------------------------------------------------------
     def _params(self):
@@ -360,8 +451,9 @@ class TabTEM(QtWidgets.QWidget):
             self.redraw()
 
     def shift_all(self):
-        pairs = [(s, self.main.stations[s.link]) for s in self.main.tems.values()
-                 if s.link in self.main.stations]
+        # центральные зондирования обрабатываются последними — их сдвиг и остаётся
+        pairs = sorted([(s, self.main.stations[s.link]) for s in self.main.tems.values()
+                        if s.link in self.main.stations], key=lambda p: p[0].is_central)
         if not pairs:
             QtWidgets.QMessageBox.information(self, "ЗСБ", "Нет привязанных зондирований.")
             return
@@ -420,25 +512,57 @@ class TabTEM(QtWidgets.QWidget):
 
         ok = ~snd.mask
         t = snd.times * 1e3
+        v = snd.signal
         e = np.where(np.isfinite(snd.err), snd.err, 0)
-        a_sig.errorbar(t[ok], snd.signal[ok], yerr=np.minimum(e[ok], 0.9 * snd.signal[ok]),
-                       fmt="s", ms=3, color="tab:green", label="ЗСБ набл.")
-        a_rt.plot(t[ok], snd.rho_tau()[ok], "s", ms=3, color="tab:green", label="ρτ набл.")
+        # исходные кривые малого/большого тока («Цикл»)
+        for key, col, lab in (("small", "tab:blue", "малый ток"), ("big", "tab:red", "большой ток")):
+            c = snd.raw.get(key) if snd.raw else None
+            if c is not None:
+                a_sig.plot(c[0] * 1e3, np.abs(c[1]), "-", color=col, lw=0.6, alpha=0.45, label=lab)
+        pos, neg = ok & (v > 0), ok & (v < 0)
+        a_sig.errorbar(t[pos], v[pos], yerr=np.minimum(e[pos], 0.9 * v[pos]), fmt="s", ms=3,
+                       color="tab:green", label="ЗСБ набл. (>0)")
+        if neg.any():
+            a_sig.errorbar(t[neg], -v[neg], yerr=np.minimum(e[neg], -0.9 * v[neg]), fmt="s", ms=3,
+                           mfc="white", color="tab:green", label="ЗСБ набл. (<0)")
+        a_sig.plot(t[~ok], np.abs(v[~ok]), "x", ms=3, color="gray", alpha=0.6, label="исключено")
+        tc = (snd.raw or {}).get("info", {}).get("t_cross")
+        if tc:
+            a_sig.axvline(tc * 1e3, color="gray", ls=":", lw=0.8)
+        central = snd.is_central and snd.rx_side == 0
+        if central:
+            a_rt.plot(t[pos], snd.rho_tau()[pos], "s", ms=3, color="tab:green", label="ρτ набл.")
         for lab, r in res.items():
             if r.tem is None:
                 continue
             c, ls = STYLE.get(lab, ("gray", "-"))
-            a_sig.plot(r.tem["times"] * 1e3, r.tem["pred"], ls, color=c, label=f"{lab} (RMS ЗСБ {r.rms_tem:.2f})")
-            a_rt.plot(r.tem["times"] * 1e3, r.tem["rho_tau_pred"], ls, color=c)
+            p = r.tem["pred"]
+            a_sig.plot(r.tem["times"] * 1e3, np.where(p > 0, p, np.nan), ls, color=c,
+                       label=f"{lab} (RMS ЗСБ {r.rms_tem:.2f})")
+            if (p < 0).any():
+                a_sig.plot(r.tem["times"] * 1e3, np.where(p < 0, -p, np.nan), ls, color=c, lw=0.8,
+                           alpha=0.6)
+            if central:
+                a_rt.plot(r.tem["times"] * 1e3, r.tem["rho_tau_pred"], ls, color=c)
+            else:
+                res_n = (r.tem["obs"] - p) / np.maximum(np.where(np.isfinite(r.tem["err"]),
+                                                                 r.tem["err"], 0),
+                                                        self.ftem.value() / 100 * np.abs(r.tem["obs"]))
+                a_rt.plot(r.tem["times"] * 1e3, res_n, "o" + ls[0], color=c, ms=3, lw=0.8)
         a_sig.set_xscale("log")
         a_sig.set_yscale("log")
         a_sig.set_ylabel("|dBz/dt|/I, Тл/(с·А)")
-        a_sig.set_title(f"ЗСБ {snd.name}: петля {snd.tx_side:g} м, {snd.config}", fontsize=10)
-        a_sig.legend(fontsize=7)
+        a_sig.set_title(f"ЗСБ {snd.name}: {snd.geometry_text}", fontsize=9)
+        a_sig.legend(fontsize=6)
         a_sig.grid(True, which="both", alpha=0.3)
-        a_rt.set_yscale("log")
         a_rt.set_xlabel("Время, мс")
-        a_rt.set_ylabel("ρτ, Ом·м")
+        if central:
+            a_rt.set_yscale("log")
+            a_rt.set_ylabel("ρτ, Ом·м")
+        else:
+            a_rt.axhspan(-1, 1, color="green", alpha=0.08)
+            a_rt.set_ylabel("Невязка, в ошибках")
+            a_rt.set_title("ρτ для этой установки не считается", fontsize=8, color="gray")
         a_rt.grid(True, which="both", alpha=0.3)
 
         if st is not None:

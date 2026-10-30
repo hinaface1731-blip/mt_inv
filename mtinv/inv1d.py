@@ -58,10 +58,11 @@ def roughness(n_layers, n_extra=0, w_extra=0.1):
 
 
 def occam_core(fwd, d, Wd, m0, R, *, max_iter=30, target_rms=1.0, lo=-3.0, hi=6.0,
-               progress=None, h=0.01):
+               progress=None, h=0.01, jac_fn=None):
     """Итерации Оккама: Гаусс–Ньютон + поиск множителя Лагранжа.
 
     fwd(m) -> прогноз данных той же длины, что d; Wd = 1/ошибки.
+    jac_fn(m, f0) -> якобиан (если не задан — конечные разности).
     Пока RMS выше целевого — берётся λ с минимальной невязкой, потом —
     самая гладкая модель с RMS <= целевого.
     Возвращает (m, rms, history).
@@ -73,6 +74,8 @@ def occam_core(fwd, d, Wd, m0, R, *, max_iter=30, target_rms=1.0, lo=-3.0, hi=6.
     hi = np.broadcast_to(np.asarray(hi, float), np.shape(m0))
 
     def jac(m, f0):
+        if jac_fn is not None:
+            return jac_fn(m, f0)
         J = np.empty((N, len(m)))
         for i in range(len(m)):
             mm = m.copy()
