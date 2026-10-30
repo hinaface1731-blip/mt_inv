@@ -19,6 +19,8 @@ class Inv2DSettings:
     modes: tuple = ("te", "tm")
     strike: float = 0.0          # град от севера по часовой
     floor_rho: float = 0.10      # относительная ошибка rho_a
+    floor_rho_tm: float | None = None  # отдельно для TM (None = как floor_rho); большое
+                                       # значение = TM почти только по фазе
     floor_phs: float = 2.9       # град
     freq_per_decade: int = 5
     fmin: float | None = None
@@ -127,7 +129,8 @@ def prepare_data(stations, profile, s: Inv2DSettings) -> Inv2DData:
             sr = st.rotated(s.strike)
             r, p, er, ep = _interp_station(sr, comp, freqs)
             R[:, j], P[:, j] = r, p
-            ER[:, j] = np.maximum(np.nan_to_num(er), s.floor_rho * r)
+            fl = s.floor_rho_tm if (mode == "tm" and s.floor_rho_tm is not None) else s.floor_rho
+            ER[:, j] = np.maximum(np.nan_to_num(er), fl * r)
             EP[:, j] = np.maximum(np.nan_to_num(ep), s.floor_phs)
         data.obs[mode] = dict(rho=R, phs=P, erho=ER, ephs=EP)
     return data

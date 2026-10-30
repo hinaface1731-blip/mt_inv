@@ -50,6 +50,11 @@ class Tab2D(QtWidgets.QWidget):
         form.addRow("Простирание:", srow)
         self.frho = dspin(1, 100, 10, 1, 0, " %")
         form.addRow("Мин. ошибка ρa:", self.frho)
+        self.frho_tm = dspin(0, 1000, 0, 10, 0, " %")
+        self.frho_tm.setSpecialValueText("как у TE")
+        self.frho_tm.setToolTip("Большое значение (100 % и больше) — TM подбирается почти только по "
+                                "фазе: так делают, когда ρa TM искажены статическим сдвигом")
+        form.addRow("Мин. ошибка ρa TM:", self.frho_tm)
         self.fphs = dspin(0.1, 30, 2.9, 0.5, 1, "°")
         form.addRow("Мин. ошибка фазы:", self.fphs)
         self.fpd = ispin(2, 12, 5)
@@ -225,6 +230,7 @@ class Tab2D(QtWidgets.QWidget):
         modes = tuple(m for m, b in (("te", self.te), ("tm", self.tm)) if b.isChecked())
         return Inv2DSettings(
             modes=modes, strike=self.strike.value(), floor_rho=self.frho.value() / 100,
+            floor_rho_tm=(self.frho_tm.value() / 100) or None,
             floor_phs=self.fphs.value(), freq_per_decade=self.fpd.value(),
             fmin=(1 / self.tmax.value()) if self.tmax.value() else None,
             fmax=(1 / self.tmin.value()) if self.tmin.value() else None,
