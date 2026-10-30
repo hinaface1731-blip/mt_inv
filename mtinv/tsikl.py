@@ -190,8 +190,28 @@ def _saturation_end(t, v):
     return float(t[k]) if k >= 2 else 0.0
 
 
+def estimate_time_shift(t, vb, vs, t_lo, t_hi=0.6e-3, max_shift=25e-6):
+    """Сдвиг по времени кривой малого тока относительно большого (с).
+
+    Перебором ищется сдвиг s, при котором отношение vb(t)/vs(t + s) на
+    перекрытии наиболее постоянно (минимальный разброс в логарифмах) —
+    так выявляется «рассогласование типа сдвига по времени» между режимами.
+    """
+    sel = (t >= t_lo) & (t <= t_hi) & (vb != 0) & np.isfinite(vb)
+    okv = (vs != 0) & np.isfinite(vs)
+    if sel.sum() < 4 or okv.sum() < 4:
+        return 0.0
+    best = (np.inf, 0.0)
+    for sh in np.arange(-5e-6, max_shift + 1e-9, 1e-6):
+        ls = np.interp(np.log(t[sel]), np.log(t[okv] + sh), np.log(np.abs(vs[okv])))
+        sd = float(np.std(np.log(np.abs(vb[sel])) - ls))
+        if sd < best[0] - 1e-9:
+            best = (sd, float(sh))
+    return best[1]
+
+
 def merge_currents(big, small, t_min=None, t_cross=None, snr_min=2.0, delay=0.0,
-                   scale_small=True):
+                   scale_small=True, time_shift="auto"):
     """big/small = (t, v, err) или None. Возвращает t, v, err, mask, info.
 
     Сшивка как в «ПРОБЕ»: на перекрытии ищется окно из 5 точек, где кривые
@@ -214,6 +234,20 @@ def merge_currents(big, small, t_min=None, t_cross=None, snr_min=2.0, delay=0.0,
 
     if big is not None and small is not None:
         vb, vs = big[1], small[1]
+        # сдвиг малого тока по времени (как сдвиг в «ПРОБЕ»): кривая малого тока
+        # пересчитывается на исходную сетку времён со сдвигом t -> t + s
+        sh = 0.0
+        if time_shift == "auto":
+            sh = estimate_time_shift(t, vb, vs, max(big_start, small_start))
+        elif time_shift:
+            sh = float(time_shift)
+        info["time_shift"] = sh
+        if sh:
+            okv = (vs != 0) & np.isfinite(vs)
+            sgn = np.sign(np.interp(t, t[okv] + sh, vs[okv]))
+            vs = sgn * np.exp(np.interp(np.log(t), np.log(t[okv] + sh), np.log(np.abs(vs[okv]))))
+            es = np.interp(t, t + sh, np.where(np.isfinite(small[2]), small[2], np.nan))
+            small = (t, vs, es)
         es = np.where(np.isfinite(small[2]), small[2], 0.0)
         both = (t >= big_start) & (t >= small_start) & (vs != 0) & (vb != 0) & \
             (np.sign(vb) == np.sign(vs)) & (np.abs(vs) > 3 * es)
@@ -318,7 +352,7 @@ def mask_sign_change(t, v, mask, info, central, e=None):
 
 
 def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, snr_min=2.0,
-                    ramp=0.0, rx_mode="coil", scale_small=True):
+                    ramp=0.0, rx_mode="coil", scale_small=True, time_shift="auto"):
     """Список TEMSounding из файлов *.pod (по одному на пикет) и список пропусков.
 
     units — единицы ЭДС в файле (uV/mV/V); rx_mode — как понимать Lrc (RX_MODES):
@@ -329,6 +363,8 @@ def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, 
     (2 × «Задержка коммутатора»), время при этом отсчитывается от середины фронта;
     0 — мгновенное выключение.
     scale_small — подгонять малый ток к большому коэффициентом (как «ПРОБА»).
+    time_shift — сдвиг малого тока по времени: "auto" — подбор по перекрытию
+    (на профиле 6 и в обработке профиля 1 он ≈ +10 мкс), число (с) или 0.
     По умолчанию — как в «ПРОБЕ»: мгновенное выключение и сшивающий коэффициент.
     """
     groups, skipped = group_files(paths)
@@ -351,7 +387,7 @@ def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, 
         big = _stack(g["б"], scale) if g.get("б") else None
         small = _stack(g["м"], scale) if g.get("м") else None
         t, v, e, mask, info = merge_currents(big, small, t_min, t_cross, snr_min, r0["delay"],
-                                             scale_small)
+                                             scale_small, time_shift)
         v, mask = mask_sign_change(t, v, mask, info, abs(r0["r"]) < 1e-6, e)
         ramps = None
         if ramp is None:
@@ -379,7 +415,8 @@ def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, 
             ramps=ramps,
             opts=dict(format="pod", files=[r["path"] for r in recs], units=units,
                       rx_turns=rx_turns, t_min=t_min, t_cross=t_cross, snr_min=snr_min,
-                      ramp=ramp, rx_mode=rx_mode, scale_small=scale_small))
+                      ramp=ramp, rx_mode=rx_mode, scale_small=scale_small,
+                      time_shift=time_shift))
         snd.raw = dict(big=big, small=small, info=info,
                        currents={k: [r["wi"] for r in g.get(k, [])] for k in ("б", "м")},
                        n_dup={k: len(g.get(k, [])) for k in ("б", "м")})

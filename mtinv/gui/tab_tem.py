@@ -115,6 +115,9 @@ class PodImportDialog(QtWidgets.QDialog):
         f.addRow("Время выключения тока:", self.ramp)
         f.addRow("", self.ramp_file)
         f.addRow("", self.scale)
+        self.tshift = QtWidgets.QCheckBox("подбирать сдвиг малого тока по времени (обычно ≈ +10 мкс)")
+        self.tshift.setChecked(True)
+        f.addRow("", self.tshift)
         if prev:
             for w, key in ((self.units, "units"), (self.rx_mode, "rx_mode")):
                 i = w.findData(prev.get(key))
@@ -136,7 +139,8 @@ class PodImportDialog(QtWidgets.QDialog):
                     t_cross=self.t_cross.value() * 1e-6 or None,
                     snr_min=self.snr.value(),
                     ramp=None if self.ramp_file.isChecked() else self.ramp.value() * 1e-6,
-                    scale_small=self.scale.isChecked())
+                    scale_small=self.scale.isChecked(),
+                    time_shift="auto" if self.tshift.isChecked() else 0.0)
 
 
 class TabTEM(QtWidgets.QWidget):

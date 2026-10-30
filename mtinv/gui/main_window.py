@@ -372,7 +372,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if o.get("format") != "pod":
                 continue
             prm = {k: o.get(k) for k in ("units", "rx_turns", "t_min", "t_cross", "snr_min",
-                                         "ramp", "rx_mode", "scale_small") if k in o}
+                                         "ramp", "rx_mode", "scale_small", "time_shift") if k in o}
             pod_groups.setdefault(json.dumps(prm, sort_keys=True), []).extend(
                 fix(f) for f in o.get("files", []))
         for key, files in pod_groups.items():
