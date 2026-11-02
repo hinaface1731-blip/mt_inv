@@ -169,6 +169,11 @@ class TabTEM(QtWidgets.QWidget):
         lr.addWidget(self.link, 1)
         left.addLayout(lr)
         ar = QtWidgets.QHBoxLayout()
+        b = QtWidgets.QPushButton("Осреднить двойные выносные пикеты")
+        b.setToolTip("Выносной пикет, снятый от двух соседних петель (NNN и NNN_2), "
+                     "объединяется в одну кривую NNN-D (как *.d2d у геофизика)")
+        b.clicked.connect(self.average_pairs)
+        left.insertWidget(left.count(), b)
         b = QtWidgets.QPushButton("Авто-привязка ≤")
         b.clicked.connect(self.auto_link)
         ar.addWidget(b)
@@ -299,6 +304,22 @@ class TabTEM(QtWidgets.QWidget):
         snd.link = self.link.currentData() or ""
         self.refresh()
         self.main.map.redraw(keep_view=True)
+
+    def average_pairs(self):
+        from ..tsikl import average_pairs
+
+        snds, rep = average_pairs(list(self.main.tems.values()))
+        if not rep:
+            QtWidgets.QMessageBox.information(self, "ЗСБ", "Двойных выносных пикетов не найдено.")
+            return
+        self.main.tems = {s.name: s for s in snds}
+        auto_link(self.main.tems, self.main.stations, 1000.0)
+        self.refresh()
+        self.main.map.redraw(keep_view=True)
+        big = [f"{n}: {100 * sp:.0f} %" for n, sp, _ in rep if sp > 0.2]
+        self.info.setText(f"Осреднено пар: {sum(m for *_, m in rep)}." +
+                          ("\nРасхождение пары > 20 % (латеральная неоднородность):\n" + "\n".join(big)
+                           if big else ""))
 
     def auto_link(self):
         n = auto_link(self.main.tems, self.main.stations, self.link_dist.value())

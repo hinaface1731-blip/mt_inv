@@ -352,6 +352,13 @@ def mask_sign_change(t, v, mask, info, central, e=None, min_points=8):
     return v, mask | new
 
 
+RX_MODES = {
+    "coil": "индукционный датчик ПДИ (точка), эквивалентная петля Lrc×Lrc",
+    "loop": "измерительная петля Lrc×Lrc на земле (усреднение по площади)",
+    "area": "Lrc — эффективная площадь датчика, м² (точка)",
+}
+
+
 def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, snr_min=2.0,
                     ramp=0.0, rx_mode="coil", scale_small=True, time_shift="auto",
                     max_rel=0.10):
@@ -424,3 +431,52 @@ def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, 
                        n_dup={k: len(g.get(k, [])) for k in ("б", "м")})
         out.append(snd)
     return out, skipped
+
+
+def average_pairs(soundings, max_spread=None):
+    """Осреднение «двойных» выносных пикетов (как файлы *-D.d2d у геофизика).
+
+    Выносной пикет между петлями снимается дважды — от петли впереди и от петли
+    сзади (06-445 и 06-445_2). Кривые на общей шкале времён осредняются в одну
+    («06-445-D»): где годны обе — среднее, где одна — она. Ошибка — большее из
+    распространённой ошибки и половины расхождения кривых. В info пишется
+    расхождение пары (std ln отношения): при сильной латеральной неоднородности
+    оно велико, и тогда осреднять не стоит (max_spread — порог, выше которого
+    пара не объединяется).
+    Возвращает (новый список, отчёт [(имя, расхождение, объединено)]).
+    """
+    by = {s.name: s for s in soundings}
+    used, out, report = set(), [], []
+    for s in soundings:
+        if s.name in used:
+            continue
+        twin = by.get(s.name + "_2")
+        if twin is None or s.is_central or twin.is_central or len(twin.times) != len(s.times) \
+                or not np.allclose(twin.times, s.times, rtol=1e-6):
+            out.append(s)
+            continue
+        a_ok, b_ok = ~s.mask, ~twin.mask
+        both = a_ok & b_ok & (np.sign(s.signal) == np.sign(twin.signal)) & (s.signal != 0)
+        spread = float(np.std(np.log(s.signal[both] / twin.signal[both]))) if both.sum() > 2 else np.inf
+        merge = max_spread is None or spread <= max_spread
+        report.append((s.name, spread, merge))
+        if not merge:
+            out += [s, twin]
+            used |= {s.name, twin.name}
+            continue
+        v = np.where(both, 0.5 * (s.signal + twin.signal), np.where(a_ok, s.signal, twin.signal))
+        ea = np.where(np.isfinite(s.err), s.err, 0.0)
+        eb = np.where(np.isfinite(twin.err), twin.err, 0.0)
+        e = np.where(both, np.maximum(0.5 * np.hypot(ea, eb), 0.5 * np.abs(s.signal - twin.signal)),
+                     np.where(a_ok, ea, eb))
+        mask = ~(a_ok | b_ok)
+        new = TEMSounding(
+            name=s.name + "-D", lat=0.5 * (s.lat + twin.lat), lon=0.5 * (s.lon + twin.lon),
+            times=s.times.copy(), signal=v, err=e, tx_side=s.tx_side, tx_b=s.tx_b,
+            rx_side=s.rx_side, offset=s.offset, offset_angle=s.offset_angle, ramp=s.ramp,
+            elev=0.5 * (s.elev + twin.elev), path=s.path, mask=mask,
+            opts=dict(s.opts, averaged=[s.name, twin.name]))
+        new.raw = dict(info=dict(s.raw.get("info", {}), pair_spread=spread, averaged=True))
+        out.append(new)
+        used |= {s.name, twin.name}
+    return out, report

@@ -109,3 +109,18 @@ def test_time_shift_between_currents_is_found():
     vs = 0.9 * f(t + 10e-6)        # кривая малого тока «опережает» на 10 мкс
     sh = estimate_time_shift(t, vb, vs, 50e-6)
     assert abs(sh - 10e-6) < 1.5e-6
+
+
+def test_average_pairs():
+    from mtinv.tem import TEMSounding
+    from mtinv.tsikl import average_pairs
+
+    t = np.logspace(-4, -3, 10)
+    a = TEMSounding("06-445", 72, 95, t, 1e-9 * np.ones(10), 1e-11 * np.ones(10), offset=100)
+    b = TEMSounding("06-445_2", 72, 95.001, t, 1.2e-9 * np.ones(10), 1e-11 * np.ones(10), offset=100)
+    c = TEMSounding("06-440", 72, 95, t, 1e-9 * np.ones(10), 1e-11 * np.ones(10))
+    out, rep = average_pairs([a, b, c])
+    names = [s.name for s in out]
+    assert names == ["06-445-D", "06-440"]
+    assert np.allclose(out[0].signal, 1.1e-9)
+    assert rep[0][2] is True
