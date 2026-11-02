@@ -14,7 +14,10 @@ from PySide6 import QtCore, QtWidgets  # noqa: E402
 
 COLORS = {"xy": "tab:red", "yx": "tab:blue", "det": "black", "ssq": "tab:green",
           "xx": "tab:orange", "yy": "tab:purple"}
-CMAPS = ["jet_r", "turbo_r", "Spectral", "RdYlBu", "viridis_r", "rainbow_r"]
+# Палитры сопротивления: по умолчанию красный — высокоомное, синий — низкоомное.
+# Варианты с «_r» — обратная шкала (красный — проводник).
+CMAPS = ["jet", "turbo", "Spectral_r", "RdYlBu_r", "rainbow", "viridis",
+         "jet_r", "turbo_r"]
 
 
 class MplWidget(QtWidgets.QWidget):
