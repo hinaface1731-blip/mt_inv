@@ -164,3 +164,23 @@ def test_profile_projection():
     a, off = p.project(np.array([s.lat for s in sts]), np.array([s.lon for s in sts]))
     assert np.all(np.diff(a) > 0)
     assert np.allclose(off, 0, atol=50)
+
+
+def test_statistical_normalization_removes_local_shift():
+    from mtinv.statshift import apply_normalization, statistical_normalization
+
+    f = np.logspace(3, -1, 20)
+    sts = []
+    for i in range(9):
+        Z = np.zeros((20, 2, 2), complex)
+        amp = np.sqrt(100 * 5 * f)
+        Z[:, 0, 1] = amp * (1 + 1j) / np.sqrt(2)
+        Z[:, 1, 0] = -Z[:, 0, 1]
+        if i == 4:
+            Z *= np.sqrt(4.0)                      # станция 4: ρa завышено в 4 раза
+        sts.append(Station(f"s{i}", 72, 95 + 0.01 * i, 0, f, Z, np.abs(Z) * 0.05))
+    c = statistical_normalization(sts, np.arange(9) * 200.0, period=0.1, window=2000)
+    assert abs(c[4][0] - 0.25) < 1e-6 and abs(c[0][0] - 1) < 1e-6
+    apply_normalization(sts, c)
+    rho, *_ = sts[4].rho_phase("xy")
+    assert np.allclose(rho, 100, rtol=1e-6)

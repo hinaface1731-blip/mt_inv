@@ -48,6 +48,17 @@ class Tab2D(QtWidgets.QWidget):
         b.clicked.connect(self.auto_strike_pt)
         srow.addWidget(b)
         form.addRow("Простирание:", srow)
+        nrow = QtWidgets.QHBoxLayout()
+        b = QtWidgets.QPushButton("Нормализация уровня…")
+        b.setToolTip("Статистическая коррекция статического сдвига: уровень ρa на выбранном "
+                     "периоде сравнивается с медианой соседей по профилю "
+                     "(как на Горном Таймыре, Пальшин, Яковлев и др., 2017)")
+        b.clicked.connect(self.normalize_levels)
+        nrow.addWidget(b)
+        b = QtWidgets.QPushButton("Сбросить сдвиги")
+        b.clicked.connect(self.reset_shifts)
+        nrow.addWidget(b)
+        form.addRow("Стат. сдвиг:", nrow)
         self.frho = dspin(1, 100, 10, 1, 0, " %")
         form.addRow("Мин. ошибка ρa:", self.frho)
         self.frho_tm = dspin(0, 1000, 0, 10, 0, " %")
@@ -233,6 +244,58 @@ class Tab2D(QtWidgets.QWidget):
         self.strike.setValue(((best + 180) % 360) - 180)
         self.main.statusBar().showMessage(
             f"Простирание по ФТ: {s:.1f}° (±90°). Выбран вариант ближе к ⟂ профилю: {best:.1f}°", 8000)
+
+    def _profile_stations(self):
+        p = self.main.profile_by_name(self.prof.currentText())
+        if p is None:
+            QtWidgets.QMessageBox.information(self, "2D", "Сначала создайте профиль на вкладке «Карта».")
+            return None, []
+        return p, [self.main.stations[n] for n in p.stations if n in self.main.stations]
+
+    def normalize_levels(self):
+        from ..statshift import apply_normalization, statistical_normalization
+
+        p, sts = self._profile_stations()
+        if not sts:
+            return
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Статистическая нормализация уровня")
+        f = QtWidgets.QFormLayout(dlg)
+        f.addRow(QtWidgets.QLabel(
+            "Уровень ρa каждой станции на выбранном периоде приводится к медиане соседних\n"
+            "станций в окне по профилю; множитель применяется ко всем частотам.\n"
+            "Окно должно быть шире локальных искажений, но уже реальных структур."))
+        per = dspin(0.0001, 10000, 0.1, 0.1, 4, " с")
+        win = dspin(100, 100000, 2000, 500, 0, " м")
+        pc = QtWidgets.QCheckBox("отдельно для XY и YX (иначе — один множитель по det)")
+        f.addRow("Период:", per)
+        f.addRow("Окно по профилю:", win)
+        f.addRow("", pc)
+        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        f.addRow(bb)
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+        x = [p.project(s.lat, s.lon)[0] for s in sts]
+        coefs = statistical_normalization(sts, x, per.value(), win.value(),
+                                          per_component=pc.isChecked())
+        apply_normalization(sts, coefs)
+        ks = np.array([[a, b] for a, b, _ in coefs], float)
+        lk = np.abs(np.log10(ks[np.isfinite(ks)]))
+        self.log(f"Нормализация ({per.value():g} с, окно {win.value():.0f} м): поправки в медиане "
+                 f"×{10 ** np.median(lk):.2f}, максимум ×{10 ** lk.max():.1f}; "
+                 f"без уровня на этом периоде: {int(np.isnan(ks[:, 0]).sum())} станций")
+        for st in sts:
+            self.main.station_data_changed(st.name)
+
+    def reset_shifts(self):
+        p, sts = self._profile_stations()
+        for st in sts:
+            st.ss = np.ones(2)
+            self.main.station_data_changed(st.name)
+        if sts:
+            self.log(f"Сдвиги сброшены у {len(sts)} станций профиля")
 
     def settings(self):
         modes = tuple(m for m, b in (("te", self.te), ("tm", self.tm)) if b.isChecked())
