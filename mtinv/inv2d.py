@@ -224,7 +224,9 @@ def build_mesh(data: Inv2DData, s: Inv2DSettings, rho_bg: float):
     hx = np.r_[pad_x[::-1], hx_core, pad_x]
     x0 = x.min() - 2 * dx - pad_x.sum()
 
-    z1 = s.z_first or max(skin_min / 20.0, 0.5)
+    # не тоньше 5 м: тонкие ячейки у поверхности искажают нормировку
+    # чувствительности (оценку глубинности), а для АМТЗ меньше не нужно
+    z1 = s.z_first or max(skin_min / 20.0, 5.0)
     z1 = float(np.round(z1, 1 if z1 < 10 else 0))
     zc = s.z_core or (min(skin_core, max(2 * width, 10 * skin_min)) if width > 0 else skin_core)
     hz = [z1]
