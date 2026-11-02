@@ -213,7 +213,7 @@ def estimate_time_shift(t, vb, vs, t_lo, t_hi=0.6e-3, max_shift=25e-6):
 
 
 def merge_currents(big, small, t_min=None, t_cross=None, snr_min=2.0, delay=0.0,
-                   scale_small=True, time_shift="auto"):
+                   scale_small=True, time_shift="auto", max_rel=0.10):
     """big/small = (t, v, err) или None. Возвращает t, v, err, mask, info.
 
     Сшивка как в «ПРОБЕ»: на перекрытии ищется окно из 5 точек, где кривые
@@ -284,15 +284,15 @@ def merge_currents(big, small, t_min=None, t_cross=None, snr_min=2.0, delay=0.0,
         valid = t >= (big_start if big is not None else small_start)
     info["t_cross"] = t_cross
 
-    # общий знак процесса: на 0.08–0.3 мс сигнал должен быть положительным
-    pol = _polarity(t, np.where(valid, v, np.nan))
-    if pol < 0:
-        v = -v
-    info["polarity_flipped"] = bool(pol < 0)
+    # знак кривой не меняется: отрицательный сигнал соосной установки — это
+    # индукционная вызванная поляризация (ИВП), а не перепутанная полярность
+    info["polarity_flipped"] = False
 
-    # шум: отдельные точки с |v| < snr_min*err исключаются по одной; поздний
-    # «хвост» отрезается после 3 шумных точек подряд (после максимума сигнал/шум)
-    noisy = np.isfinite(e) & (np.abs(v) < snr_min * e)
+    # шум: отдельные точки с |v| < snr_min*err или относительной ошибкой больше
+    # max_rel исключаются по одной; поздний «хвост» отрезается после 3 таких
+    # точек подряд (после максимума сигнал/шум)
+    rel = np.where(np.isfinite(e), e / np.maximum(np.abs(v), 1e-300), 0.0)
+    noisy = (np.isfinite(e) & (np.abs(v) < snr_min * e)) | (rel > max_rel)
     mask = ~valid.copy()
     mask |= noisy
     snr = np.where(np.isfinite(e) & (e > 0), np.abs(v) / np.where(e > 0, e, 1), np.inf)
@@ -310,51 +310,51 @@ def merge_currents(big, small, t_min=None, t_cross=None, snr_min=2.0, delay=0.0,
     return t, v, e, mask, info
 
 
-def mask_sign_change(t, v, mask, info, central, e=None):
-    """Центральная установка: сигнал не должен менять знак.
+def mask_sign_change(t, v, mask, info, central, e=None, min_points=8):
+    """Соосная (центральная) установка: индукционный сигнал положителен.
 
-    Если знак меняется (ВП, суперпарамагнетизм, сбой режима, неточное
-    положение датчика), оставляется участок одного знака с наибольшим
-    суммарным lg(сигнал/шум) (а не просто самый длинный — шумный хвост),
-    остальное исключается; если он отрицательный — знак кривой меняется.
+    Отрицательные значения — проявление ИВП. Оставляется ранний участок
+    положительного сигнала до первой устойчивой (2 точки подряд) смены знака;
+    если сигнал на 0.08–0.3 мс в основном отрицательный или положительных
+    точек меньше min_points, кривая признаётся неинтерпретируемой (брак по ИВП,
+    как файлы *.dod у геофизика): маскируется целиком, info["ip_reject"]=True.
+    Для разнесённых установок смена знака физична, ничего не делается.
     Возвращает (v, mask)."""
     info["late_sign_change"] = False
     info["sign_segment"] = None
+    info["ip_reject"] = False
     if not central:
         return v, mask
     idx = np.where(~mask)[0]
     if len(idx) == 0:
         return v, mask
-    sg = np.sign(v[idx])
-    if e is not None:
-        ee = np.where(np.isfinite(e[idx]) & (e[idx] > 0), e[idx], np.nan)
-        w = np.log10(np.clip(np.abs(v[idx]) / ee, 1.0, 1e4))
-        w = np.where(np.isfinite(w), w, 1.0)
-    else:
-        w = np.ones(len(idx))
-    best, best_score = (0, 0), -1.0
-    start = 0
-    for i in range(1, len(idx) + 1):
-        if i == len(idx) or sg[i] != sg[start]:
-            score = float(np.sum(w[start:i]))
-            if score > best_score:
-                best, best_score = (start, i), score
-            start = i
-    keep = idx[best[0]:best[1]]
-    if len(keep) == len(idx):
-        return v, mask
+    win = (t[idx] >= POL_WINDOW[0]) & (t[idx] <= POL_WINDOW[1])
+    neg_dominates = win.any() and np.median(v[idx][win]) < 0
+    keep = []
+    run = 0
+    for i in idx:
+        if v[i] > 0:
+            keep.append(i)
+            run = 0
+        else:
+            run += 1
+            if run >= 2 and keep:
+                break
+    keep = np.array([i for i in keep if v[i] > 0], int)
     new = np.ones_like(mask)
     new[keep] = False
-    info["late_sign_change"] = True
-    info["sign_segment"] = (float(t[keep[0]]), float(t[keep[-1]]))
-    if sg[best[0]] < 0:
-        v = -v
-        info["polarity_flipped"] = not info.get("polarity_flipped", False)
+    if neg_dominates or len(keep) < min_points:
+        info["ip_reject"] = True
+        return v, np.ones_like(mask)
+    if len(keep) < len(idx):
+        info["late_sign_change"] = True
+        info["sign_segment"] = (float(t[keep[0]]), float(t[keep[-1]]))
     return v, mask | new
 
 
 def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, snr_min=2.0,
-                    ramp=0.0, rx_mode="coil", scale_small=True, time_shift="auto"):
+                    ramp=0.0, rx_mode="coil", scale_small=True, time_shift="auto",
+                    max_rel=0.10):
     """Список TEMSounding из файлов *.pod (по одному на пикет) и список пропусков.
 
     units — единицы ЭДС в файле (uV/mV/V); rx_mode — как понимать Lrc (RX_MODES):
@@ -389,7 +389,7 @@ def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, 
         big = _stack(g["б"], scale) if g.get("б") else None
         small = _stack(g["м"], scale) if g.get("м") else None
         t, v, e, mask, info = merge_currents(big, small, t_min, t_cross, snr_min, r0["delay"],
-                                             scale_small, time_shift)
+                                             scale_small, time_shift, max_rel)
         v, mask = mask_sign_change(t, v, mask, info, abs(r0["r"]) < 1e-6, e)
         ramps = None
         if ramp is None:
@@ -418,7 +418,7 @@ def build_soundings(paths, units="mV", rx_turns=1.0, t_min=50e-6, t_cross=None, 
             opts=dict(format="pod", files=[r["path"] for r in recs], units=units,
                       rx_turns=rx_turns, t_min=t_min, t_cross=t_cross, snr_min=snr_min,
                       ramp=ramp, rx_mode=rx_mode, scale_small=scale_small,
-                      time_shift=time_shift))
+                      time_shift=time_shift, max_rel=max_rel))
         snd.raw = dict(big=big, small=small, info=info,
                        currents={k: [r["wi"] for r in g.get(k, [])] for k in ("б", "м")},
                        n_dup={k: len(g.get(k, [])) for k in ("б", "м")})
