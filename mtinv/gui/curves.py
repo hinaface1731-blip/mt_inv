@@ -46,6 +46,30 @@ class CurvesTab(QtWidgets.QWidget):
         ctl.addWidget(b)
         ctl.addStretch(1)
 
+        ctl3 = QtWidgets.QHBoxLayout()
+        b = QtWidgets.QPushButton("Заполнить пропуски прямой (все станции)")
+        b.setToolTip("Исключённые точки внутри коротких пропусков (например, «мёртвая зона» "
+                     "1–5 кГц) заменяются прямой по lg f, проведённой по 3 хорошим точкам "
+                     "с каждой стороны. Ошибка восстановленных точек увеличивается. "
+                     "Концы кривых и шумные участки не заполняются.")
+        b.clicked.connect(self.fill_all)
+        ctl3.addWidget(b)
+        ctl3.addWidget(QtWidgets.QLabel("пропуск до"))
+        self.max_gap = dspin(0.1, 2.0, 0.6, 0.1, 1, " дек.")
+        ctl3.addWidget(self.max_gap)
+        ctl3.addWidget(QtWidgets.QLabel("ошибка |Z|"))
+        self.fill_err = dspin(1, 50, 10, 1, 0, " %")
+        self.fill_err.setToolTip("Относительная ошибка |Z| восстановленных точек "
+                                 "(10 % → ρa ±20 %, фаза ±6°)")
+        ctl3.addWidget(self.fill_err)
+        b = QtWidgets.QPushButton("Отменить заполнение")
+        b.clicked.connect(self.unfill_all)
+        ctl3.addWidget(b)
+        hint3 = QtWidgets.QLabel("□ — восстановленные точки, × — исключённые")
+        hint3.setStyleSheet("color: gray")
+        ctl3.addWidget(hint3)
+        ctl3.addStretch(1)
+
         ctl2 = QtWidgets.QHBoxLayout()
         ctl2.addWidget(QtWidgets.QLabel("Статический сдвиг (множитель ρa):  XY ×"))
         self.ssx = dspin(0.001, 1000, 1.0, 0.05, 3)
@@ -69,6 +93,7 @@ class CurvesTab(QtWidgets.QWidget):
         hint.setStyleSheet("color: gray")
         lay = QtWidgets.QVBoxLayout(self)
         lay.addLayout(ctl)
+        lay.addLayout(ctl3)
         lay.addLayout(ctl2)
         lay.addWidget(hint)
         lay.addWidget(self.plot, 1)
@@ -98,8 +123,32 @@ class CurvesTab(QtWidgets.QWidget):
         self.maskChanged.emit()
         self.redraw()
 
+    def fill_all(self):
+        from ..mtdata import fill_gaps
+
+        sts = list(self.main.stations.values())
+        n = sum(fill_gaps(st, max_gap=self.max_gap.value(), rel_err=self.fill_err.value() / 100)
+                for st in sts)
+        left = sum(int(st.mask.sum()) for st in sts)
+        self.main.statusBar().showMessage(
+            f"Заполнено прямой {n} частот; остаются исключёнными {left} "
+            f"(концы кривых, длинные и шумные участки)", 10000)
+        self.maskChanged.emit()
+        self.redraw()
+
+    def unfill_all(self):
+        from ..mtdata import unfill_gaps
+
+        n = sum(unfill_gaps(st) for st in self.main.stations.values())
+        self.main.statusBar().showMessage(f"Возвращены исходные значения на {n} частотах", 6000)
+        self.maskChanged.emit()
+        self.redraw()
+
     def reset_mask(self):
         if self.station is not None:
+            from ..mtdata import unfill_gaps
+
+            unfill_gaps(self.station)
             self.station.mask[:] = False
             self.maskChanged.emit()
             self.redraw()
@@ -137,16 +186,22 @@ class CurvesTab(QtWidgets.QWidget):
         self._pick_axes = [ar, ap]
         T = st.period
         m = st.mask
+        fl = getattr(st, "filled", np.zeros(len(T), bool)) & ~m
         for c, b in self.cb.items():
             if not b.isChecked():
                 continue
             rho, phs, er, ep = st_r.rho_phase(c)
             col = COLORS[c]
-            good = ~m & np.isfinite(rho)
+            good = ~m & ~fl & np.isfinite(rho)
             ar.errorbar(T[good], rho[good], yerr=np.minimum(er[good], 0.9 * rho[good]),
                         fmt="o", ms=4, color=col, label=c.upper(), capsize=0, lw=0.8)
             ap.errorbar(T[good], phs[good], yerr=ep[good], fmt="o", ms=4, color=col,
                         capsize=0, lw=0.8)
+            if fl.any():
+                ar.errorbar(T[fl], rho[fl], yerr=np.minimum(er[fl], 0.9 * rho[fl]), fmt="s",
+                            ms=5, mfc="none", color=col, capsize=0, lw=0.6, alpha=0.8)
+                ap.errorbar(T[fl], phs[fl], yerr=ep[fl], fmt="s", ms=5, mfc="none", color=col,
+                            capsize=0, lw=0.6, alpha=0.8)
             if self.show_masked.isChecked() and m.any():
                 ar.plot(T[m], rho[m], "x", color=col, alpha=0.5)
                 ap.plot(T[m], phs[m], "x", color=col, alpha=0.5)

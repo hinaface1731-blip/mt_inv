@@ -314,8 +314,12 @@ class MainWindow(QtWidgets.QMainWindow):
             if not path:
                 return
         d = dict(version=__version__,
-                 stations=[dict(path=s.path, mask=s.mask.astype(int).tolist(),
-                                ss=[float(v) for v in s.ss])
+                 stations=[dict(path=s.path,
+                                mask=(s._orig[4] if getattr(s, "_orig", None) is not None
+                                      else s.mask).astype(int).tolist(),
+                                ss=[float(v) for v in s.ss],
+                                fill=getattr(s, "fill_opts", None)
+                                if getattr(s, "_orig", None) is not None else None)
                            for s in self.stations.values()],
                  tems=[dict(path=t.path, opts=t.opts, link=t.link,
                             mask=t.mask.astype(int).tolist()) for t in self.tems.values()],
@@ -336,7 +340,7 @@ class MainWindow(QtWidgets.QMainWindow):
             d = json.load(f)
         self.stations.clear()
         base = os.path.dirname(path)
-        paths, masks, sss = [], {}, {}
+        paths, masks, sss, fills = [], {}, {}, {}
 
         def fix(p):
             if not os.path.exists(p) and os.path.exists(os.path.join(base, os.path.basename(p))):
@@ -348,10 +352,15 @@ class MainWindow(QtWidgets.QMainWindow):
             paths.append(p)
             masks[p] = s.get("mask", [])
             sss[p] = s.get("ss", [1.0, 1.0])
+            if s.get("fill"):
+                fills[p] = s["fill"]
         self.load_paths(paths, masks)
+        from ..mtdata import fill_gaps
         for st in self.stations.values():
             if st.path in sss:
                 st.ss = np.array(sss[st.path], float)
+            if st.path in fills:
+                fill_gaps(st, **fills[st.path])
         self.tems.clear()
         extra, groups = {}, {}
         for t in d.get("tems", []):

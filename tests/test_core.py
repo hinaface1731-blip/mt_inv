@@ -184,3 +184,28 @@ def test_statistical_normalization_removes_local_shift():
     apply_normalization(sts, c)
     rho, *_ = sts[4].rho_phase("xy")
     assert np.allclose(rho, 100, rtol=1e-6)
+
+
+def test_fill_gaps_dead_band():
+    from mtinv.mtdata import auto_mask, fill_gaps, unfill_gaps
+
+    f = np.logspace(4, -1, 66)
+    rho_true, phs_true = rho_phase_1d(np.array([100.0, 10.0]), np.array([300.0]), f)
+    z = np.sqrt(rho_true * f / 0.2) * np.exp(1j * np.deg2rad(phs_true))
+    Z = np.zeros((len(f), 2, 2), complex)
+    Z[:, 0, 1] = z
+    Z[:, 1, 0] = -z
+    st = Station("t", 0, 0, 0, f, Z, 0.03 * np.abs(Z) + 1e-9)
+    dead = (f > 1500) & (f < 3500)  # «мёртвая зона»: несколько точек-выбросов
+    st.Z[dead] *= 0.1 * np.exp(1j * 0.8)
+    st.Z[-3:] *= 5.0  # шумный хвост
+    auto_mask(st)
+    assert st.mask[dead].all()
+    n = fill_gaps(st)
+    assert n >= dead.sum()
+    assert not st.mask[dead].any() and st.filled[dead].all()
+    rho, phs, _, _ = st.rho_phase("xy")
+    assert np.allclose(np.log10(rho[dead]), np.log10(rho_true[dead]), atol=0.05)
+    assert np.allclose(phs[dead], phs_true[dead], atol=3)
+    assert st.mask[-1]  # конец кривой не экстраполируется
+    assert unfill_gaps(st) == n and st.mask[dead].all() and not st.filled.any()
