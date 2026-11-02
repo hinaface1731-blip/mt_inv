@@ -24,13 +24,21 @@ class _StoredJMixin:
             for src in self.survey.get_sources_by_frequency(freq):
                 u_src = f[src, self._solutionType]
                 for rx in src.receiver_list:
-                    v = np.eye(rx.nD, dtype=float)
+                    # при одном отсчёте SimPEG складывает (N,1) и (N,) -> плотная
+                    # матрица N×N (N — число рёбер): передаём вектор
+                    v = np.eye(rx.nD, dtype=float) if rx.nD > 1 else np.ones(1)
                     df_duT, df_dmT = rx.evalDeriv(src, self.mesh, f, v=v, adjoint=True)
+                    if rx.nD == 1:
+                        df_duT = np.asarray(df_duT).reshape(-1, 1)
+                        if not isinstance(df_dmT, Zero):
+                            df_dmT = np.asarray(df_dmT).reshape(-1, 1)
                     X = A_i * np.asarray(df_duT)
-                    du = -self.getADeriv(freq, u_src, X, adjoint=True)
+                    du = np.asarray(-self.getADeriv(freq, u_src, X, adjoint=True))
+                    if rx.nD == 1:
+                        du = du.reshape(-1, 1)
                     rhs = self.getRHSDeriv(freq, src, X, adjoint=True)
                     if not isinstance(rhs, Zero):
-                        du = du + rhs
+                        du = du + (np.asarray(rhs).reshape(-1, 1) if rx.nD == 1 else rhs)
                     if not isinstance(df_dmT, Zero) and not (
                             isinstance(df_dmT, (list, tuple)) and isinstance(df_dmT[0], Zero)):
                         dm = np.asarray(df_dmT[0] if isinstance(df_dmT, (list, tuple))

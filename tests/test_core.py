@@ -209,3 +209,34 @@ def test_fill_gaps_dead_band():
     assert np.allclose(phs[dead], phs_true[dead], atol=3)
     assert st.mask[-1]  # конец кривой не экстраполируется
     assert unfill_gaps(st) == n and st.mask[dead].all() and not st.filled.any()
+
+
+def test_stored_jacobian_single_receiver():
+    """J по отсчёту одной станции на частоте (rx.nD == 1) — без плотной N×N."""
+    import warnings
+
+    import discretize
+    from simpeg import maps
+    from simpeg.electromagnetics import natural_source as nsem
+
+    from mtinv._simpeg_fast import FastLogTE, FastLogTM
+
+    warnings.filterwarnings("ignore")
+    mesh = discretize.TensorMesh([[(200, 4), (100, 20), (200, 4)], [(400, 6), (100, 12)]],
+                                 origin="CN")
+    rng = np.random.default_rng(0)
+    m = np.log(0.01) + 0.3 * rng.standard_normal(mesh.nC)
+    dm = 1e-3 * rng.standard_normal(mesh.nC)
+    for Sim, orient in ((FastLogTE, "xy"), (FastLogTM, "yx")):
+        def make():
+            rx1 = [nsem.receivers.Impedance(np.c_[[150.0], [0.0]], orientation=orient, component=c)
+                   for c in ("apparent_resistivity", "phase")]
+            rx2 = [nsem.receivers.Impedance(np.c_[np.linspace(-500, 500, 3), np.zeros(3)],
+                                            orientation=orient, component=c)
+                   for c in ("apparent_resistivity", "phase")]
+            src = [nsem.sources.Planewave(rx1, frequency=30.0),
+                   nsem.sources.Planewave(rx2, frequency=300.0)]
+            return Sim(mesh, survey=nsem.Survey(src), sigmaMap=maps.ExpMap(mesh))
+        J = make().getJ(m)
+        dd = make().dpred(m + dm) - make().dpred(m - dm)
+        assert np.abs(2 * J @ dm - dd).max() < 1e-4 * np.abs(dd).max()
