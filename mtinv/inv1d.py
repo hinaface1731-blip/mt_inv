@@ -58,7 +58,7 @@ def roughness(n_layers, n_extra=0, w_extra=0.1):
 
 
 def occam_core(fwd, d, Wd, m0, R, *, max_iter=30, target_rms=1.0, lo=-3.0, hi=6.0,
-               progress=None, h=0.01, jac_fn=None):
+               progress=None, h=0.01, jac_fn=None, lambdas=None):
     """Итерации Оккама: Гаусс–Ньютон + поиск множителя Лагранжа.
 
     fwd(m) -> прогноз данных той же длины, что d; Wd = 1/ошибки.
@@ -91,7 +91,7 @@ def occam_core(fwd, d, Wd, m0, R, *, max_iter=30, target_rms=1.0, lo=-3.0, hi=6.
     f = fwd(m)
     rms = rms_of(f)
     history = [rms]
-    lambdas = np.logspace(-3, 4, 22)
+    lambdas = np.logspace(-3, 4, 22) if lambdas is None else np.asarray(lambdas, float)
     for it in range(max_iter):
         J = jac(m, f)
         JW = J * Wd[:, None]

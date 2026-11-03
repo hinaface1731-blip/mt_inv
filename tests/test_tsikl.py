@@ -124,3 +124,24 @@ def test_average_pairs():
     assert names == ["06-445-D", "06-440"]
     assert np.allclose(out[0].signal, 1.1e-9)
     assert rep[0][2] is True
+
+
+def test_lci_recovers_step():
+    """LCI: три пикета над двухслойной средой с разной мощностью первого слоя."""
+    from mtinv.tem import TEMSounding
+    from mtinv.tem_lci import _forward, lci_inversion
+
+    t = np.logspace(np.log10(5e-5), np.log10(3e-3), 20)
+    snds, xs = [], []
+    for i, (x, top) in enumerate([(0, 80), (100, 80), (200, 200)]):
+        s = TEMSounding(name=f"p{i}", lat=0, lon=0, times=t, signal=np.ones_like(t),
+                        err=np.full_like(t, np.nan), tx_side=100.0)
+        sig = _forward(s, t)(np.array([300.0, 20.0]), np.array([float(top)]))
+        s.signal, s.err, s.mask = sig, 0.03 * np.abs(sig), np.zeros(len(t), bool)
+        snds.append(s)
+        xs.append(x)
+    r = lci_inversion(snds, xs, n_layers=20, z_first=10, z_max=2000, floor=0.03, max_iter=10)
+    assert r.rms < 1.5
+    z = 0.5 * (r.tops[1:] + r.tops[:-1])
+    depth = [z[np.argmax(r.rho[i, :-1] < 80)] for i in range(3)]
+    assert depth[0] < 130 and depth[2] > 150
