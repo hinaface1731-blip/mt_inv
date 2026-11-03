@@ -145,3 +145,27 @@ def test_lci_recovers_step():
     z = 0.5 * (r.tops[1:] + r.tops[:-1])
     depth = [z[np.argmax(r.rho[i, :-1] < 80)] for i in range(3)]
     assert depth[0] < 130 and depth[2] > 150
+
+
+def test_lci_joint_mt_recovers_static_shift():
+    """LCI + АМТЗ: ρa АМТЗ занижена в 0.3 раза — подбирается k ≈ 1/0.3."""
+    from mtinv.inv1d import rho_phase_1d
+    from mtinv.tem import TEMSounding
+    from mtinv.tem_lci import _forward, lci_inversion
+
+    rho, th = np.array([300.0, 20.0]), np.array([150.0])
+    t = np.logspace(np.log10(5e-5), np.log10(3e-3), 20)
+    f = np.logspace(4, 1, 16)
+    ra, ph = rho_phase_1d(rho, th, f)
+    snds, mts = [], []
+    for i in range(2):
+        s = TEMSounding(name=f"p{i}", lat=0, lon=0, times=t, signal=np.ones_like(t),
+                        err=np.full_like(t, np.nan), tx_side=100.0)
+        sig = _forward(s, t)(rho, th)
+        s.signal, s.err, s.mask = sig, 0.03 * np.abs(sig), np.zeros(len(t), bool)
+        snds.append(s)
+        mts.append(dict(freq=f, rho=0.3 * ra, phs=ph, erho=0.03 * ra, ephs=np.full_like(f, 1.0)))
+    r = lci_inversion(snds, [0, 100], n_layers=20, z_first=10, z_max=3000, floor=0.03, mt=mts,
+                      use_rho=True, invert_ss=True, floor_rho=0.03, floor_phs=1.0, max_iter=12)
+    assert np.all(np.abs(np.log10(r.ss) - np.log10(1 / 0.3)) < 0.1)
+    assert r.rms < 2.0

@@ -9,6 +9,12 @@ lg ρ одного и того же слоя у соседних по профи
 
 Прямая задача — быстрое ядро (LoopTEMForward) с аналитическим якобианом,
 поэтому профиль из ~100 пикетов считается за минуты.
+
+К пикету можно приложить данные АМТЗ ближайшей станции (mt_data из joint1d):
+* только фазы (use_rho=False) — совместная инверсия в духе Meju (1996): фаза
+  не искажается статическим сдвигом, уровень сопротивлений задаёт ЗСБ;
+* ρa и фазы с подбором множителя статического сдвига k для каждой станции
+  (invert_ss=True): наблюдённая ρa = истинная / k.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .inv1d import layer_mesh, occam_core
+from .inv1d import layer_mesh, occam_core, rho_phase_1d
 from .joint1d import tem_data, tem_transform
 from .tem import LoopTEMForward, TEMSounding, rho_tau
 
@@ -34,6 +40,9 @@ class LCIResult:
     history: list
     doi: np.ndarray          # глубинность по чувствительности, м
     fits: list = field(default_factory=list)   # dict(times, obs, pred) по пикетам
+    rms_tem: np.ndarray | None = None   # RMS ЗСБ по пикетам
+    rms_mt: np.ndarray | None = None    # RMS АМТЗ по пикетам (nan — без АМТЗ)
+    ss: np.ndarray | None = None        # подобранные множители k (nan — нет)
 
 
 def _forward(snd: TEMSounding, times):
@@ -67,19 +76,34 @@ def lateral_roughness(x, n_layers, alpha_lat=1.0, d_ref=100.0, w_max=3.0):
 
 def lci_inversion(soundings, x, *, n_layers=35, z_first=10.0, z_max=4000.0, alpha_lat=1.0,
                   floor=0.10, rho0=None, target_rms=1.0, max_iter=20,
-                  progress=None, n_threads=None) -> LCIResult:
-    """soundings — список TEMSounding; x — их положения вдоль профиля (м)."""
+                  progress=None, n_threads=None, mt=None, use_rho=False, invert_ss=False,
+                  floor_rho=0.10, floor_phs=2.0, w_ss=0.05) -> LCIResult:
+    """soundings — список TEMSounding; x — их положения вдоль профиля (м);
+    mt — None или список той же длины: dict из joint1d.mt_data() или None."""
     x = np.asarray(x, float)
     ns = len(soundings)
+    mt = list(mt) if mt is not None else [None] * ns
+    if not use_rho:
+        invert_ss = False
     tops, thick = layer_mesh(n_layers, z_first, z_max)
+    nl = n_layers
+    npar = ns * nl + (ns if invert_ss else 0)
     blocks = []
-    for s in soundings:
+    for i, s in enumerate(soundings):
         td = tem_data(s)
         if len(td["times"]) < 3:
             raise ValueError(f"{s.name}: мало точек")
         tr, dt, st, s0 = tem_transform(td["obs"], td["err"], floor)
-        blocks.append(dict(snd=s, td=td, tr=tr, d=dt, sd=st, s0=s0,
-                           fwd=_forward(s, td["times"])))
+        b = dict(snd=s, td=td, tr=tr, s0=s0, fwd=_forward(s, td["times"]), nt=len(dt), mt=mt[i])
+        dd, sd = [dt], [st]
+        if mt[i] is not None:
+            if use_rho:
+                dd.append(np.log10(mt[i]["rho"]))
+                sd.append(np.maximum(mt[i]["erho"] / mt[i]["rho"], floor_rho) / np.log(10))
+            dd.append(mt[i]["phs"])
+            sd.append(np.maximum(mt[i]["ephs"], floor_phs))
+        b["d"], b["sd"] = np.concatenate(dd), np.concatenate(sd)
+        blocks.append(b)
     nd = [len(b["d"]) for b in blocks]
     off = np.r_[0, np.cumsum(nd)]
     d = np.concatenate([b["d"] for b in blocks])
@@ -89,42 +113,83 @@ def lci_inversion(soundings, x, *, n_layers=35, z_first=10.0, z_max=4000.0, alph
 
     pool = ThreadPoolExecutor(max_workers=n_threads or min(8, os.cpu_count() or 1))
 
+    def mt_pred(i, lr, lss):
+        r, p = rho_phase_1d(10 ** lr, thick, blocks[i]["mt"]["freq"])
+        out = [np.log10(r) - lss] if use_rho else []
+        out.append(p)
+        return np.concatenate(out)
+
+    def one_fwd(i, m):
+        b = blocks[i]
+        lr = m[i * nl:(i + 1) * nl]
+        out = [b["tr"](b["fwd"](10 ** lr, thick))]
+        if b["mt"] is not None:
+            out.append(mt_pred(i, lr, m[ns * nl + i] if invert_ss else 0.0))
+        return np.concatenate(out)
+
     def fwd(m):
-        M = m.reshape(ns, n_layers)
-        out = pool.map(lambda i: blocks[i]["tr"](blocks[i]["fwd"](10 ** M[i], thick)), range(ns))
-        return np.concatenate(list(out))
+        return np.concatenate(list(pool.map(lambda i: one_fwd(i, m), range(ns))))
 
     def jac_fn(m, f0):
-        M = m.reshape(ns, n_layers)
         J = np.zeros((len(d), len(m)))
 
         def one(i):
             b = blocks[i]
-            val, Jt = b["fwd"].jac(10 ** M[i], thick)
+            lr = m[i * nl:(i + 1) * nl]
+            val, Jt = b["fwd"].jac(10 ** lr, thick)
             dtr = 1.0 / np.sqrt(b["s0"] ** 2 + val ** 2)
-            J[off[i]:off[i + 1], i * n_layers:(i + 1) * n_layers] = Jt * dtr[:, None]
+            r0 = off[i]
+            J[r0:r0 + b["nt"], i * nl:(i + 1) * nl] = Jt * dtr[:, None]
+            if b["mt"] is not None:
+                lss = m[ns * nl + i] if invert_ss else 0.0
+                base = mt_pred(i, lr, lss)
+                h = 0.01
+                for k in range(nl):
+                    lk = lr.copy()
+                    lk[k] += h
+                    J[r0 + b["nt"]:off[i + 1], i * nl + k] = (mt_pred(i, lk, lss) - base) / h
+                if invert_ss:
+                    nf = len(b["mt"]["freq"])
+                    J[r0 + b["nt"]:r0 + b["nt"] + nf, ns * nl + i] = -1.0
 
         list(pool.map(one, range(ns)))
         return J
 
     if rho0 is None:
         rho0 = float(np.exp(np.median([np.log(s.halfspace_rho()) for s in soundings])))
-    m0 = np.full(ns * n_layers, np.log10(rho0))
-    R = lateral_roughness(x, n_layers, alpha_lat)
+    m0 = np.full(npar, np.log10(rho0))
+    lo = np.full(npar, -1.0)
+    hi = np.full(npar, 5.5)
+    R = lateral_roughness(x, nl, alpha_lat)
+    if invert_ss:
+        m0[ns * nl:] = 0.0
+        lo[ns * nl:], hi[ns * nl:] = -1.5, 1.5
+        R = np.hstack([R, np.zeros((R.shape[0], ns))])
+        D = np.zeros((ns, npar))
+        D[np.arange(ns), ns * nl + np.arange(ns)] = w_ss
+        R = np.vstack([R, D])
     m, rms, hist = occam_core(fwd, d, Wd, m0, R, max_iter=max_iter, target_rms=target_rms,
-                              lo=-1.0, hi=5.5, progress=progress, jac_fn=jac_fn,
+                              lo=lo, hi=hi, progress=progress, jac_fn=jac_fn,
                               lambdas=np.logspace(-2, 3, 11))
     f = fwd(m)
     r = (d - f) * Wd
-    M = m.reshape(ns, n_layers)
+    M = m[:ns * nl].reshape(ns, nl)
     rms_each = np.array([np.sqrt(np.mean(r[off[i]:off[i + 1]] ** 2)) for i in range(ns)])
+    rms_tem = np.array([np.sqrt(np.mean(r[off[i]:off[i] + blocks[i]["nt"]] ** 2))
+                        for i in range(ns)])
+    rms_mt = np.array([np.sqrt(np.mean(r[off[i] + blocks[i]["nt"]:off[i + 1]] ** 2))
+                       if blocks[i]["mt"] is not None else np.nan for i in range(ns)])
+    ss = None
+    if invert_ss:
+        ss = np.array([10 ** m[ns * nl + i] if blocks[i]["mt"] is not None else np.nan
+                       for i in range(ns)])
 
     # глубинность: кровля самого глубокого слоя, ниже которого остаётся >= 1 %
-    # суммарной чувствительности Σ|W·J| пикета
+    # суммарной чувствительности Σ|W·J| пикета (ЗСБ и АМТЗ вместе)
     J = jac_fn(m, f) * Wd[:, None]
     doi = np.zeros(ns)
     for i in range(ns):
-        sens = np.abs(J[off[i]:off[i + 1], i * n_layers:(i + 1) * n_layers]).sum(axis=0)
+        sens = np.abs(J[off[i]:off[i + 1], i * nl:(i + 1) * nl]).sum(axis=0)
         c = np.cumsum(sens[::-1])[::-1]               # чувствительность слоёв глубже k
         k = np.where(c >= 0.01 * c[0])[0]
         doi[i] = tops[k[-1]] if len(k) else tops[-1]
@@ -132,9 +197,13 @@ def lci_inversion(soundings, x, *, n_layers=35, z_first=10.0, z_max=4000.0, alph
     for i, b in enumerate(blocks):
         pred = b["fwd"](10 ** M[i], thick)
         R_ = b["snd"].tx_radius
-        fits.append(dict(times=b["td"]["times"], obs=b["td"]["obs"], pred=pred,
-                         rho_tau_obs=rho_tau(b["td"]["times"], b["td"]["obs"], R_),
-                         rho_tau_pred=rho_tau(b["td"]["times"], pred, R_)))
+        fit = dict(times=b["td"]["times"], obs=b["td"]["obs"], pred=pred,
+                   rho_tau_obs=rho_tau(b["td"]["times"], b["td"]["obs"], R_),
+                   rho_tau_pred=rho_tau(b["td"]["times"], pred, R_))
+        if b["mt"] is not None:
+            rp, pp = rho_phase_1d(10 ** M[i], thick, b["mt"]["freq"])
+            fit["mt"] = dict(b["mt"], rho_pred=rp, phs_pred=pp)
+        fits.append(fit)
     pool.shutdown()
     return LCIResult([s.name for s in soundings], x, tops, 10 ** M, rms, rms_each, hist,
-                     doi, fits)
+                     doi, fits, rms_tem, rms_mt, ss)
