@@ -34,6 +34,7 @@ class Inv2DSettings:
     max_iter: int = 15
     beta0_ratio: float = 10.0
     cooling_factor: float = 2.0
+    beta_min_ratio: float = 0.01  # β не ниже этой доли начального (защита от «раскачки»)
     alpha_s: float = 1e-4
     smooth_x: float = 1.0        # относительный вес горизонтальной гладкости
     smooth_z: float = 1.0
@@ -357,11 +358,38 @@ def run_inversion(stations, profile, s: Inv2DSettings, progress=None, stop_flag=
             if stop_flag and stop_flag():
                 raise StopInversion()
 
+    class SafeCooling(directives.InversionDirective):
+        """Ослабление регуляризации только пока невязка заметно падает и не
+        ниже beta_min_ratio·β0; если при минимальном β RMS не меняется —
+        остановка. Иначе при недостижимом целевом RMS β падает на порядки и
+        модель «раскачивается» до границ (чередование 10 и 10⁵ Ом·м)."""
+
+        beta0 = None
+        stall = 0
+
+        def endIter(self):
+            if self.beta0 is None:
+                self.beta0 = self.invProb.beta
+            if len(rms_hist) >= 2 and rms_hist[-1] > rms_hist[-2] * 0.98:
+                self.stall += 1
+            else:
+                self.stall = 0
+            floor = self.beta0 * s.beta_min_ratio
+            if self.invProb.beta / s.cooling_factor >= floor:
+                if self.stall == 0 or self.stall == 1:
+                    self.invProb.beta = self.invProb.beta / s.cooling_factor
+            elif self.stall >= 2:
+                say("RMS больше не снижается при минимальной регуляризации — остановка")
+                self.opt.stopNextIteration = True
+            if self.stall >= 3:
+                say("RMS не снижается 3 итерации — остановка")
+                self.opt.stopNextIteration = True
+
     dirs = [
         directives.BetaEstimate_ByEig(beta0_ratio=s.beta0_ratio, random_seed=1),
-        directives.BetaSchedule(coolingFactor=s.cooling_factor, coolingRate=1),
-        directives.TargetMisfit(chifact=s.target_chifact),
         Progress(),
+        SafeCooling(),
+        directives.TargetMisfit(chifact=s.target_chifact),
     ]
     inv = inversion.BaseInversion(inv_prob, directiveList=dirs)
     say("Запуск инверсии…")
