@@ -64,3 +64,41 @@ def test_joint_inversion_finds_shift():
     st = _station(0.4, 0.4)
     r = joint_inversion(mt=mt_data(st, "xy"), tem=_sounding(), invert_ss=True, max_iter=15)
     assert abs(np.log(r.ss / 2.5)) < 0.2
+
+
+def test_loop_forward_matches_empymod():
+    """Независимая сверка прямой задачи ЗСБ (петля 100×100, центр и разнос 100 м под 45°,
+    ступенька и линейный фронт 20 мкс) с empymod: петля из четырёх электрических линий,
+    другой фильтр Ганкеля (wer_201_2018), свой переход во время."""
+    import pytest
+
+    empymod = pytest.importorskip("empymod")
+    from mtinv.tem import LoopTEMForward
+
+    mu0 = 4e-7 * np.pi
+    t = np.logspace(np.log10(1e-4), -2, 12)
+    tau = 20e-6
+    a = 50.0
+    segs = [(-a, a, -a, -a), (a, a, -a, a), (a, -a, a, a), (-a, -a, a, -a)]
+    res, thick = [300.0, 20.0, 1000.0], [150.0, 300.0]
+    x, w = np.polynomial.legendre.leggauss(12)
+    u, wu = 0.5 * (x + 1), 0.5 * w
+    for r, ang in ((0.0, 0.0), (100.0, 45.0)):
+        rx, ry = r * np.cos(np.radians(ang)), r * np.sin(np.radians(ang))
+        tf = np.exp(np.linspace(np.log(t.min()) - 0.3, np.log(t.max() + tau) + 0.3, 500))
+        h = 0
+        for x0, x1, y0, y1 in segs:
+            h = h + np.asarray(empymod.bipole(
+                src=[x0, x1, y0, y1, 0.0, 0.0], rec=[rx, ry, 0.0, 0, 90], depth=[0.0, 150.0, 450.0],
+                res=[2e14] + res, freqtime=tf, signal=-1, mrec=True, strength=1, srcpts=11,
+                ht="dlf", htarg={"dlf": "wer_201_2018"}, ft="dlf", verb=1))
+        step = -mu0 * np.gradient(h, np.log(tf)) / tf
+
+        def f(q):
+            return np.interp(np.log(q), np.log(tf), step)
+
+        ours = LoopTEMForward(t, 100.0, 100.0, 0.0, r, ang)(np.array(res), np.array(thick))
+        assert np.allclose(ours, f(t), rtol=2e-3)
+        ref_ramp = np.array([np.sum(wu * f(ti + u * tau)) for ti in t])
+        ours_ramp = LoopTEMForward(t, 100.0, 100.0, 0.0, r, ang, tau)(np.array(res), np.array(thick))
+        assert np.allclose(ours_ramp, ref_ramp, rtol=2e-3)
