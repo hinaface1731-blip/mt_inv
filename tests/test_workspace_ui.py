@@ -97,8 +97,9 @@ def test_background_job_returns_workspace_to_ready():
     assert w.shell.jobs == 1
     timer = QtCore.QElapsedTimer()
     timer.start()
-    while any(thread.isRunning() for thread, worker in w.tab2d._threads) and timer.elapsed() < 3000:
+    while w.shell.jobs and timer.elapsed() < 3000:
         QtTest.QTest.qWait(10)
+    QtTest.QTest.qWait(30)  # allow the worker thread's queued quit/delete events
     app.processEvents()
     assert results == [42] and errors == []
     assert w.shell.jobs == 0 and w.shell.progress.isHidden()
