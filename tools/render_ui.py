@@ -31,6 +31,8 @@ def main():
     w.shell.load_demo()
     for index in range(6):
         w.tabs.setCurrentIndex(index)
+        if index == 2:
+            w.pseudo.redraw()
         app.processEvents()
         for widget in w.tabs.currentWidget().findChildren(QtWidgets.QWidget):
             if hasattr(widget, "canvas"):

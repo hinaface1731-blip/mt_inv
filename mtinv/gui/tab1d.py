@@ -80,7 +80,7 @@ class Tab1D(QtWidgets.QWidget):
         f2 = QtWidgets.QFormLayout()
         f2.addRow("Палитра:", self.cmap)
         f2.addRow("Глубина разреза:", self.sec_max)
-        f2.addRow("", self.sec_log)
+        f2.addRow(self.sec_log)
         left.addLayout(f2)
         left.addWidget(b3)
         left.addWidget(self.info)

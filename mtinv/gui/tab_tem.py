@@ -183,6 +183,7 @@ class TabTEM(QtWidgets.QWidget):
 
         box = QtWidgets.QGroupBox("Параметры")
         f = QtWidgets.QFormLayout(box)
+        f.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         self.comp = QtWidgets.QComboBox()
         for k, t in COMPS:
             self.comp.addItem(t, k)
@@ -203,7 +204,7 @@ class TabTEM(QtWidgets.QWidget):
         b1.clicked.connect(lambda: self.run(["ЗСБ"]))
         left.addWidget(b1)
 
-        sbox = QtWidgets.QGroupBox("2. Статический сдвиг АМТЗ по ЗСБ")
+        sbox = QtWidgets.QGroupBox("2. Статический сдвиг")
         sl = QtWidgets.QVBoxLayout(sbox)
         b = QtWidgets.QPushButton("Рассчитать сдвиг станции")
         b.clicked.connect(self.calc_shift)
@@ -221,9 +222,10 @@ class TabTEM(QtWidgets.QWidget):
         sl.addWidget(b)
         left.addWidget(sbox)
 
-        jbox = QtWidgets.QGroupBox("3. Совместная инверсия АМТЗ + ЗСБ")
+        jbox = QtWidgets.QGroupBox("3. Совместная модель")
         jl = QtWidgets.QVBoxLayout(jbox)
-        self.inv_ss = QtWidgets.QCheckBox("подбирать статический сдвиг АМТЗ")
+        self.inv_ss = QtWidgets.QCheckBox("Подбирать сдвиг АМТЗ")
+        self.inv_ss.setToolTip("Подбирать статический сдвиг АМТЗ при совместной инверсии")
         self.inv_ss.setChecked(True)
         jl.addWidget(self.inv_ss)
         b = QtWidgets.QPushButton("Совместная инверсия")
@@ -248,10 +250,11 @@ class TabTEM(QtWidgets.QWidget):
         lw.setObjectName("parameterPanel")
         lw.setLayout(left)
         scroll = QtWidgets.QScrollArea()
+        scroll.setObjectName("parameterScroll")
         scroll.setWidget(lw)
         scroll.setWidgetResizable(True)
         scroll.setMaximumWidth(380)
-        scroll.setMinimumWidth(330)
+        scroll.setMinimumWidth(360)
         lay = QtWidgets.QHBoxLayout(self)
         lay.addWidget(scroll)
         lay.addWidget(self.plot, 1)

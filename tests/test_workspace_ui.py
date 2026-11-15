@@ -92,6 +92,18 @@ def test_toolbar_wraps_at_small_width():
     assert flow.heightForWidth(180) > flow.heightForWidth(700)
 
 
+def test_parameter_panels_need_only_vertical_scrolling():
+    app, w = make_window()
+    w.resize(1500, 980)
+    for index in (3, 4, 5):
+        w.tabs.setCurrentIndex(index)
+        app.processEvents()
+        app.processEvents()
+        for scroll in w.tabs.currentWidget().findChildren(QtWidgets.QScrollArea, "parameterScroll"):
+            assert scroll.horizontalScrollBar().maximum() == 0
+    w.close()
+
+
 def test_background_job_returns_workspace_to_ready():
     app, w = make_window()
     results, errors = [], []
