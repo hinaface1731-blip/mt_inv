@@ -6,7 +6,8 @@ import traceback
 
 import matplotlib
 
-matplotlib.use("QtAgg")
+# Embed a Qt canvas directly. Do not switch pyplot's process-wide backend:
+# numerical notebooks and headless test runners may already be using Agg.
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402

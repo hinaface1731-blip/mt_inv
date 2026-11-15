@@ -47,10 +47,11 @@ class WorkspaceShell(QtWidgets.QWidget):
         self.nav.currentRowChanged.connect(tabs.setCurrentIndex)
         tabs.currentChanged.connect(self.page_changed)
         rl.addWidget(self.nav, 1)
-        help_btn = QtWidgets.QPushButton("Как пользоваться")
-        help_btn.setIcon(icon("help", "#b7d5dd"))
-        help_btn.clicked.connect(main.help)
-        rl.addWidget(help_btn)
+        self.help_btn = QtWidgets.QPushButton("Как пользоваться")
+        self.help_btn.setIcon(icon("help", "#b7d5dd"))
+        self.help_btn.setToolTip("Как пользоваться MT-Inv")
+        self.help_btn.clicked.connect(main.help)
+        rl.addWidget(self.help_btn)
         self.foot = QtWidgets.QLabel(f"MT-Inv  {__version__}", objectName="brandSub")
         rl.addWidget(self.foot)
 
@@ -226,6 +227,7 @@ class WorkspaceShell(QtWidgets.QWidget):
         self.rail.setFixedWidth(66 if compact else 194)
         self.brand.setText("MT" if compact else "MT / INV")
         self.brand_sub.setVisible(not compact)
+        self.help_btn.setText("" if compact else "Как пользоваться")
         self.foot.setVisible(not compact)
         for i, (title, _, _) in enumerate(PAGES):
             self.nav.item(i).setText("" if compact else title)

@@ -7,7 +7,7 @@ import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 from mtinv.gui.main_window import MainWindow
 
 
@@ -40,7 +40,17 @@ def main():
     w.grab().save(str(out / "07-compact.png"))
     if args.log_preview:
         for filename in ("00-welcome.png", "01-page.png", "05-page.png", "07-compact.png"):
-            print(f"UI_IMAGE:{filename}:" + base64.b64encode((out / filename).read_bytes()).decode())
+            image = w.grab().toImage() if False else None
+            from PySide6 import QtGui
+            image = QtGui.QImage(str(out / filename))
+            if image.width() > 1200:
+                image = image.scaledToWidth(1200, QtCore.Qt.SmoothTransformation)
+            buf = QtCore.QBuffer()
+            buf.open(QtCore.QIODevice.WriteOnly)
+            image.save(buf, "JPG", 85)
+            encoded = base64.b64encode(bytes(buf.data())).decode()
+            for part, start in enumerate(range(0, len(encoded), 4000)):
+                print(f"UI_CHUNK:{filename}:{part}:" + encoded[start:start+4000])
     w.close()
     app.processEvents()
 

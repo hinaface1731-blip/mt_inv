@@ -34,7 +34,7 @@ jobs:
       - run: python -m pip check
       - run: python -m pytest -q -ra tests --junitxml=test-results.xml
       - name: Render desktop previews
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         run: python tools/render_ui.py --output ui-previews --log-preview
       - name: Record complete environment
         if: always()
