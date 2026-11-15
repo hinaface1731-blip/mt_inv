@@ -23,6 +23,7 @@ class Tab1D(QtWidgets.QWidget):
         self.plot = MplWidget(self)
 
         form = QtWidgets.QFormLayout()
+        form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         form.setVerticalSpacing(10)
         form.addRow(section_label("Параметры модели"))
         self.comp = QtWidgets.QComboBox()
@@ -78,6 +79,7 @@ class Tab1D(QtWidgets.QWidget):
         left.addWidget(self.prof)
         left.addWidget(b2)
         f2 = QtWidgets.QFormLayout()
+        f2.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         f2.addRow("Палитра:", self.cmap)
         f2.addRow("Глубина разреза:", self.sec_max)
         f2.addRow(self.sec_log)

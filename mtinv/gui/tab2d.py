@@ -24,6 +24,7 @@ class Tab2D(QtWidgets.QWidget):
 
         # ---- параметры
         form = QtWidgets.QFormLayout()
+        form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         form.setVerticalSpacing(10)
         form.addRow(section_label("Наблюдения"))
         self.prof = QtWidgets.QComboBox()
