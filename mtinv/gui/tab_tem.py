@@ -13,7 +13,7 @@ from ..joint1d import SHIFT_DEPTH_FRAC, joint_inversion, mt_data, static_shift_f
 from ..profile import to_local
 from ..tem import CONFIGS, SIGNAL_UNITS, read_tem_header
 from ..tsikl import RX_MODES
-from .common import MplWidget, dspin, error_box, ispin, start_worker
+from .common import MplWidget, dspin, error_box, ispin, start_worker, FlowLayout
 
 COMPS = [("det", "Det (инвариант)"), ("xy", "XY"), ("yx", "YX"), ("ssq", "SSQ"),
          ("av", "(XY−YX)/2")]
@@ -162,13 +162,13 @@ class TabTEM(QtWidgets.QWidget):
         self.list = QtWidgets.QListWidget()
         self.list.currentRowChanged.connect(self._on_current)
         left.addWidget(self.list, 1)
-        lr = QtWidgets.QHBoxLayout()
+        lr = FlowLayout()
         lr.addWidget(QtWidgets.QLabel("Привязка:"))
         self.link = QtWidgets.QComboBox()
         self.link.activated.connect(self._set_link)
-        lr.addWidget(self.link, 1)
+        lr.addWidget(self.link)
         left.addLayout(lr)
-        ar = QtWidgets.QHBoxLayout()
+        ar = FlowLayout()
         b = QtWidgets.QPushButton("Осреднить двойные пикеты")
         b.setToolTip("Выносной пикет, снятый от двух соседних петель (NNN и NNN_2), "
                      "объединяется в одну кривую NNN-D (как *.d2d у геофизика)")
