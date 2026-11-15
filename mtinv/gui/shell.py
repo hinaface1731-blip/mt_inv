@@ -22,7 +22,7 @@ class WorkspaceShell(QtWidgets.QWidget):
         self.main, self.tabs = main, tabs
         self.jobs = 0
         self.rail = QtWidgets.QFrame(objectName="rail")
-        self.rail.setFixedWidth(194)
+        self.rail.setFixedWidth(210)
         rl = QtWidgets.QVBoxLayout(self.rail)
         rl.setContentsMargins(12, 26, 12, 18)
         rl.setSpacing(12)
@@ -234,7 +234,7 @@ class WorkspaceShell(QtWidgets.QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         compact = self.width() < 1280
-        self.rail.setFixedWidth(66 if compact else 194)
+        self.rail.setFixedWidth(66 if compact else 210)
         self.brand.setText("MT" if compact else "MT / INV")
         self.brand_sub.setVisible(not compact)
         self.help_btn.setText("" if compact else "Как пользоваться")

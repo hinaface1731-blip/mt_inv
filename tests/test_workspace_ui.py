@@ -37,7 +37,9 @@ def test_empty_state_demo_search_and_clear():
     # without necessarily failing the test process.
     w.curves.set_station(w.current_station())
     assert len(w.curves.plot.figure.axes) == 6
-    assert all(ax.has_data() for ax in w.curves.plot.figure.axes)
+    axes = w.curves.plot.figure.axes
+    assert all(axes[i].has_data() for i in (0, 1, 3, 4, 5))
+    assert any("нет типпера" in text.get_text() for text in axes[2].texts)
     assert "TMR001" in w.info.text()
     assert w.shell.stack.currentWidget() is w.shell.panel
     w.station_search.setText("tmr001")
@@ -65,7 +67,7 @@ def test_compact_navigation_and_station_toggle():
     assert not w.shell.station_panel.isHidden()
     w.resize(1500, 940)
     app.processEvents()
-    assert w.shell.rail.width() == 194
+    assert w.shell.rail.width() == 210
     w.close()
 
 

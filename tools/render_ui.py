@@ -43,7 +43,7 @@ def main():
     w.curves.plot.canvas.draw()
     w.grab().save(str(out / "07-compact.png"))
     if args.log_preview:
-        for filename in ("00-welcome.png", "01-page.png", "05-page.png", "07-compact.png"):
+        for filename in sorted(p.name for p in out.glob("*.png")):
             from PySide6 import QtGui
             image = QtGui.QImage(str(out / filename))
             if image.width() > 1200:
