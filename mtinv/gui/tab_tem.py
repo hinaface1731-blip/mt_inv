@@ -183,7 +183,7 @@ class TabTEM(QtWidgets.QWidget):
 
         box = QtWidgets.QGroupBox("Параметры")
         f = QtWidgets.QFormLayout(box)
-        f.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        f.setRowWrapPolicy(QtWidgets.QFormLayout.WrapAllRows)
         self.comp = QtWidgets.QComboBox()
         for k, t in COMPS:
             self.comp.addItem(t, k)
@@ -249,6 +249,8 @@ class TabTEM(QtWidgets.QWidget):
         lw = QtWidgets.QWidget()
         lw.setObjectName("parameterPanel")
         lw.setLayout(left)
+        for label in lw.findChildren(QtWidgets.QLabel):
+            label.setWordWrap(True)
         scroll = QtWidgets.QScrollArea()
         scroll.setObjectName("parameterScroll")
         scroll.setWidget(lw)

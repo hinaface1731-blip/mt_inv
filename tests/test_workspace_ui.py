@@ -102,7 +102,8 @@ def test_parameter_panels_need_only_vertical_scrolling():
         for scroll in w.tabs.currentWidget().findChildren(QtWidgets.QScrollArea, "parameterScroll"):
             assert scroll.horizontalScrollBar().maximum() == 0, (
                 f"page={index}, viewport={scroll.viewport().width()}, "
-                f"content={scroll.widget().width()}, min={scroll.widget().minimumSizeHint().width()}"
+                f"content={scroll.widget().width()}, min={scroll.widget().minimumSizeHint().width()}, "
+                f"wide children={[(type(c).__name__, c.text() if hasattr(c, 'text') else '', c.minimumSizeHint().width()) for c in scroll.widget().findChildren(QtWidgets.QWidget) if c.minimumSizeHint().width() > scroll.viewport().width() - 30]}"
             )
     w.close()
 
