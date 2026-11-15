@@ -31,13 +31,21 @@ CMAPS = ["jet", "turbo", "Spectral_r", "RdYlBu_r", "rainbow", "viridis",
          "jet_r", "turbo_r"]
 
 
+class PlotCanvas(FigureCanvasQTAgg):
+    """A hidden stacked page must not give Matplotlib a singular 0px bbox."""
+    def resizeEvent(self, event):
+        if event.size().width() > 0 and event.size().height() > 0:
+            super().resizeEvent(event)
+
+
 class MplWidget(QtWidgets.QWidget):
     """Холст matplotlib с панелью инструментов (масштаб, сохранение PNG/PDF)."""
 
     def __init__(self, parent=None, figsize=(8, 6)):
         super().__init__(parent)
         self.figure = Figure(figsize=figsize, layout="constrained")
-        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas = PlotCanvas(self.figure)
+        self.canvas.setMinimumSize(240, 180)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.toolbar.setIconSize(QtCore.QSize(17, 17))
         self.toolbar.setMovable(False)

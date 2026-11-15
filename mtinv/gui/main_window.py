@@ -32,7 +32,10 @@ class MainWindow(QtWidgets.QMainWindow):
         apply_theme(self)
         self.setWindowTitle(f"MT-Inv {__version__} — инверсия МТ-данных")
         self.resize(1450, 900)
-        self.setMinimumSize(1000, 680)
+        screen = QtWidgets.QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else QtCore.QRect(0, 0, 1450, 900)
+        self.setMinimumSize(min(1000, available.width()), min(680, available.height()))
+        self.resize(min(1450, available.width()), min(900, available.height()))
         self.stations = {}   # name -> Station (порядок загрузки)
         self.profiles = []
         self.tems = {}       # name -> TEMSounding

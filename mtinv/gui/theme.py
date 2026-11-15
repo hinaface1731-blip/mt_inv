@@ -96,6 +96,7 @@ QTabWidget#workspaceTabs::pane { border: 0; }
 QTabBar::tab { background: #f0f4f7; color: #596b7c; border: 1px solid #dfe6ed; padding: 8px 12px; margin-right: 3px; border-top-left-radius: 5px; border-top-right-radius: 5px; }
 QTabBar::tab:selected { background: white; color: #087f8c; border-bottom: 2px solid #087f8c; }
 QScrollArea { border: 0; background: transparent; }
+QWidget#parameterPanel { background: #f7f9fb; border-radius: 7px; }
 QScrollBar:vertical { background: #f1f4f7; width: 9px; margin: 0; }
 QScrollBar::handle:vertical { background: #bccbd5; border-radius: 4px; min-height: 28px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }

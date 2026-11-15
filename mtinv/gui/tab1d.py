@@ -86,6 +86,7 @@ class Tab1D(QtWidgets.QWidget):
         left.addWidget(self.info)
         left.addStretch(1)
         lw = QtWidgets.QWidget()
+        lw.setObjectName("parameterPanel")
         lw.setLayout(left)
         lw.setMinimumWidth(290)
         scroll = QtWidgets.QScrollArea()

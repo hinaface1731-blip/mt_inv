@@ -11,7 +11,7 @@ from PySide6 import QtWidgets
 
 from ..inv2d import Inv2DSettings, run_inversion
 from ..mtdata import median_strike
-from .common import CMAPS, MplWidget, dspin, error_box, ispin, start_worker, FlowLayout, section_label
+from .common import CMAPS, MplWidget, dspin, error_box, ispin, start_worker, FlowLayout, section_label, CollapsiblePanel
 
 
 class Tab2D(QtWidgets.QWidget):
@@ -40,7 +40,6 @@ class Tab2D(QtWidgets.QWidget):
         form.addRow("Моды:", mrow)
         srow = QtWidgets.QHBoxLayout()
         self.strike = dspin(-180, 180, 0, 5, 1, "°")
-        srow.addWidget(self.strike)
         b = QtWidgets.QPushButton("⟂ профилю")
         b.setToolTip("Простирание = азимут профиля − 90°")
         b.clicked.connect(self.auto_strike_profile)
@@ -49,7 +48,8 @@ class Tab2D(QtWidgets.QWidget):
         b.setToolTip("Медианное простирание по фазовому тензору (неоднозначность 90°!)")
         b.clicked.connect(self.auto_strike_pt)
         srow.addWidget(b)
-        form.addRow("Простирание:", srow)
+        form.addRow("Простирание:", self.strike)
+        form.addRow(srow)
         nrow = QtWidgets.QHBoxLayout()
         b = QtWidgets.QPushButton("Нормализация…")
         b.setToolTip("Статистическая коррекция статического сдвига: уровень ρa на выбранном "
@@ -60,7 +60,8 @@ class Tab2D(QtWidgets.QWidget):
         b = QtWidgets.QPushButton("Сбросить сдвиги")
         b.clicked.connect(self.reset_shifts)
         nrow.addWidget(b)
-        form.addRow("Стат. сдвиг:", nrow)
+        form.addRow(section_label("Статический сдвиг"))
+        form.addRow(nrow)
         form.addRow(section_label("Ошибки и диапазон"))
         self.frho = dspin(1, 100, 10, 1, 0, " %")
         form.addRow("Мин. ошибка ρa:", self.frho)
@@ -133,13 +134,9 @@ class Tab2D(QtWidgets.QWidget):
         left = QtWidgets.QVBoxLayout()
         left.setSpacing(12)
         left.addLayout(form)
-        left.addWidget(self.run_btn)
-        left.addWidget(self.stop_btn)
-        left.addWidget(self.status)
-        left.addWidget(self.logw, 1)
-        left.addLayout(brow)
-        left.addWidget(b2)
+        left.addStretch(1)
         lw = QtWidgets.QWidget()
+        lw.setObjectName("parameterPanel")
         lw.setLayout(left)
         lw.setMaximumWidth(360)
         scroll = QtWidgets.QScrollArea()
@@ -147,6 +144,23 @@ class Tab2D(QtWidgets.QWidget):
         scroll.setWidget(lw)
         scroll.setWidgetResizable(True)
         scroll.setMaximumWidth(380)
+        sidebar = QtWidgets.QWidget()
+        sidebar.setMinimumWidth(310)
+        sidebar.setMaximumWidth(380)
+        side = QtWidgets.QVBoxLayout(sidebar)
+        side.setContentsMargins(0, 0, 0, 0)
+        side.setSpacing(8)
+        side.addWidget(scroll, 1)
+        side.addWidget(self.run_btn)
+        side.addWidget(self.stop_btn)
+        side.addWidget(self.status)
+        log_layout = QtWidgets.QVBoxLayout()
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        log_layout.addWidget(self.logw)
+        self.log_panel = CollapsiblePanel("Журнал расчёта", [log_layout])
+        side.addWidget(self.log_panel)
+        side.addLayout(brow)
+        side.addWidget(b2)
 
         # ---- графики
         self.sec = MplWidget(self)
@@ -222,7 +236,7 @@ class Tab2D(QtWidgets.QWidget):
         self.tabs.addTab(curw, "Подбор (кривые)")
 
         lay = QtWidgets.QHBoxLayout(self)
-        lay.addWidget(scroll)
+        lay.addWidget(sidebar)
         lay.addWidget(self.tabs, 1)
 
     # ------------------------------------------------------------------

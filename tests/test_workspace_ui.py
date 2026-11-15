@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6 import QtCore, QtWidgets, QtTest
 from mtinv.gui.main_window import MainWindow
-from mtinv.gui.common import FlowLayout
+from mtinv.gui.common import FlowLayout, start_worker
 
 
 def make_window():
@@ -33,6 +33,12 @@ def test_empty_state_demo_search_and_clear():
     assert w.shell.stack.currentWidget() is w.shell.empty
     w.shell.load_demo()
     assert len(w.stations) == 15 and len(w.profiles) == 1
+    # Call directly as well: Qt signal handlers otherwise print exceptions
+    # without necessarily failing the test process.
+    w.curves.set_station(w.current_station())
+    assert len(w.curves.plot.figure.axes) == 6
+    assert all(ax.has_data() for ax in w.curves.plot.figure.axes)
+    assert "TMR001" in w.info.text()
     assert w.shell.stack.currentWidget() is w.shell.panel
     w.station_search.setText("tmr001")
     shown = [w.list.item(i).text() for i in range(w.list.count()) if not w.list.item(i).isHidden()]
@@ -82,3 +88,18 @@ def test_toolbar_wraps_at_small_width():
     for text in ("Компоненты", "Поворот", "Отбраковка", "Экспорт"):
         flow.addWidget(QtWidgets.QPushButton(text))
     assert flow.heightForWidth(180) > flow.heightForWidth(700)
+
+
+def test_background_job_returns_workspace_to_ready():
+    app, w = make_window()
+    results, errors = [], []
+    start_worker(w.tab2d, lambda progress, log, stop: 42, results.append, errors.append)
+    assert w.shell.jobs == 1
+    timer = QtCore.QElapsedTimer()
+    timer.start()
+    while any(thread.isRunning() for thread, worker in w.tab2d._threads) and timer.elapsed() < 3000:
+        QtTest.QTest.qWait(10)
+    app.processEvents()
+    assert results == [42] and errors == []
+    assert w.shell.jobs == 0 and w.shell.progress.isHidden()
+    w.close()

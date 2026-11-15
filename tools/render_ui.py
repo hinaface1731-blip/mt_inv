@@ -4,6 +4,7 @@ import base64
 import os
 from pathlib import Path
 import sys
+import traceback
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -19,6 +20,9 @@ def main():
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    errors = []
+    old_hook = sys.excepthook
+    sys.excepthook = lambda *exc: errors.append("".join(traceback.format_exception(*exc)))
     w = MainWindow()
     w.resize(1500, 980)
     w.show()
@@ -40,7 +44,6 @@ def main():
     w.grab().save(str(out / "07-compact.png"))
     if args.log_preview:
         for filename in ("00-welcome.png", "01-page.png", "05-page.png", "07-compact.png"):
-            image = w.grab().toImage() if False else None
             from PySide6 import QtGui
             image = QtGui.QImage(str(out / filename))
             if image.width() > 1200:
@@ -53,6 +56,9 @@ def main():
                 print(f"UI_CHUNK:{filename}:{part}:" + encoded[start:start+4000])
     w.close()
     app.processEvents()
+    sys.excepthook = old_hook
+    if errors:
+        raise RuntimeError("Qt callback failed during visual review:\n" + "\n".join(errors))
 
 
 if __name__ == "__main__":

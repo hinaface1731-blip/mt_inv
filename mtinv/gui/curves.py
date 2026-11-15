@@ -48,7 +48,7 @@ class CurvesTab(QtWidgets.QWidget):
 
         ctl3 = FlowLayout()
         b = QtWidgets.QPushButton("Заполнить пропуски")
-        b.setToolTip("Исключённые точки внутри коротких пропусков (например, «мёртвая зона» "
+        b.setToolTip("Для всех станций. Исключённые точки внутри коротких пропусков (например, «мёртвая зона» "
                      "1–5 кГц) заменяются прямой по lg f, проведённой по 3 хорошим точкам "
                      "с каждой стороны. Ошибка восстановленных точек увеличивается. "
                      "Концы кривых и шумные участки не заполняются.")
@@ -63,6 +63,7 @@ class CurvesTab(QtWidgets.QWidget):
                                  "(10 % → ρa ±20 %, фаза ±6°)")
         ctl3.addWidget(self.fill_err)
         b = QtWidgets.QPushButton("Отменить заполнение")
+        b.setToolTip("Вернуть исходные значения на всех станциях")
         b.clicked.connect(self.unfill_all)
         ctl3.addWidget(b)
         hint3 = QtWidgets.QLabel("□ — восстановленные точки, × — исключённые")
@@ -71,7 +72,7 @@ class CurvesTab(QtWidgets.QWidget):
         ctl3.addStretch(1)
 
         ctl2 = FlowLayout()
-        ctl2.addWidget(QtWidgets.QLabel("Статический сдвиг (множитель ρa):  XY ×"))
+        ctl2.addWidget(QtWidgets.QLabel("Сдвиг ρa текущей станции: XY ×"))
         self.ssx = dspin(0.001, 1000, 1.0, 0.05, 3)
         ctl2.addWidget(self.ssx)
         ctl2.addWidget(QtWidgets.QLabel("YX ×"))
@@ -94,7 +95,7 @@ class CurvesTab(QtWidgets.QWidget):
         hint.setWordWrap(True)
         lay = QtWidgets.QVBoxLayout(self)
         lay.addLayout(ctl)
-        self.corrections = CollapsiblePanel("Коррекция и заполнение пропусков · все станции", [ctl3, ctl2])
+        self.corrections = CollapsiblePanel("Коррекция и заполнение пропусков", [ctl3, ctl2])
         lay.addWidget(self.corrections)
         lay.addWidget(hint)
         lay.addWidget(self.plot, 1)

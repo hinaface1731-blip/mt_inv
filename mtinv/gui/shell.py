@@ -69,6 +69,7 @@ class WorkspaceShell(QtWidgets.QWidget):
         hl.setSpacing(10)
         top = QtWidgets.QHBoxLayout()
         self.project = QtWidgets.QLabel("НОВЫЙ ПРОЕКТ", objectName="eyebrow")
+        self.project.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
         top.addWidget(self.project, 1)
         self.activity = QtWidgets.QLabel("Готово к работе", objectName="activity")
         top.addWidget(self.activity)
@@ -93,6 +94,8 @@ class WorkspaceShell(QtWidgets.QWidget):
         title_row.addWidget(self.station_toggle)
         shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+L"), main)
         shortcut.activated.connect(self.station_toggle.toggle)
+        search_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+F"), main)
+        search_shortcut.activated.connect(self.focus_search)
         open_btn = QtWidgets.QPushButton("Открыть EDI")
         open_btn.setIcon(icon("folder", "white"))
         open_btn.setProperty("role", "primary")
@@ -200,11 +203,18 @@ class WorkspaceShell(QtWidgets.QWidget):
         self.refresh_context()
 
     def refresh_context(self):
-        self.project.setText(Path(self.main.project_path).name if self.main.project_path else "НОВЫЙ ПРОЕКТ")
+        project = Path(self.main.project_path).name if self.main.project_path else "НОВЫЙ ПРОЕКТ"
+        self.project.setText(project)
+        self.project.setToolTip(project)
         n, p = len(self.main.stations), len(self.main.profiles)
         self.data_badge.setText(f"Станций: {n}  ·  Профилей: {p}" if n else "Нет данных")
         self.stack.setCurrentWidget(self.empty if n == 0 and self.tabs.currentIndex() == 0 else self.panel)
         self.save_btn.setEnabled(bool(n or self.main.tems or self.main.project_path))
+
+    def focus_search(self):
+        self.station_toggle.setChecked(True)
+        self.main.station_search.setFocus(QtCore.Qt.ShortcutFocusReason)
+        self.main.station_search.selectAll()
 
     def job_started(self):
         self.jobs += 1
