@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from mtinv.edi import read_edi, write_edi
-from mtinv.inv1d import rho_phase_1d
+from mtinv.inv1d import rho_phase_1d, occam1d, layer_mesh
 from mtinv.inv2d import Inv2DSettings, prepare_data
 from mtinv.mtdata import Station
 from mtinv.profile import Profile
@@ -90,6 +90,20 @@ class EDIRegressions(unittest.TestCase):
             ra, ph = rho_phase_1d([rho], [], freq)
             np.testing.assert_allclose(ra, rho, rtol=1e-12)
             np.testing.assert_allclose(ph, 45., atol=1e-12)
+
+    def test_invalid_1d_inputs(self):
+        for args in (([100., 10.], [], [1.]), ([0.], [], [1.]), ([100.], [], [0.])):
+            with self.assertRaises(ValueError):
+                rho_phase_1d(*args)
+        with self.assertRaises(ValueError):
+            layer_mesh(z_first=100, z_max=10)
+        with self.assertRaises(ValueError):
+            occam1d([1., 10.], [100., 100.], [45., 45.], use_rho=False, use_phase=False)
+
+    def test_resistivity_only_fit_keeps_points_without_phase(self):
+        result = occam1d([1., 10.], [100., 100.], [np.nan, np.nan],
+                         use_phase=False, n_layers=10, max_iter=2)
+        self.assertLess(result.rms, 1e-5)
 
     def test_incomplete_tensor_works_in_2d_without_rotation(self):
         st = station(False)

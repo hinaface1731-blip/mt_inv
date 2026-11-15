@@ -6,7 +6,9 @@ from simpeg.electromagnetics import natural_source as nsem
 
 from mtinv._simpeg_fast import FastLogTE, FastLogTM
 from mtinv.inv1d import rho_phase_1d
-from mtinv.inv2d import Inv2DData, forward_2d, terrain_geometry
+from mtinv.inv2d import Inv2DData, Inv2DSettings, forward_2d, terrain_geometry, run_inversion
+from mtinv.mtdata import Station
+from mtinv.profile import Profile
 
 
 def test_2d_halfspace_matches_analytical_and_refines():
@@ -14,7 +16,7 @@ def test_2d_halfspace_matches_analytical_and_refines():
     for h in (500., 250.):
         mesh = discretize.TensorMesh([
             np.r_[h * 1.4 ** np.arange(12, 0, -1), np.full(12, h), h * 1.4 ** np.arange(1, 13)],
-            np.r_[h * 1.4 ** np.arange(15, 0, -1), np.full(12, h)]], origin="CN")
+            np.r_[(h / 20) * 1.4 ** np.arange(28, 0, -1), np.full(12, h / 20)]], origin="CN")
         pred = forward_2d(mesh, np.full(mesh.n_cells, 100.), np.array([-500., 500.]), freqs)
         for mode in ("te", "tm"):
             np.testing.assert_allclose(pred[mode]["rho"], 100., rtol=.03)
@@ -22,7 +24,7 @@ def test_2d_halfspace_matches_analytical_and_refines():
 
 
 def test_2d_layered_earth_matches_independent_1d_recursion():
-    hz = np.r_[100. * 1.4 ** np.arange(18, 0, -1), np.full(10, 100.)]
+    hz = np.r_[10. * 1.4 ** np.arange(28, 0, -1), np.full(100, 10.)]
     hx = np.r_[500. * 1.4 ** np.arange(14, 0, -1), np.full(10, 500.),
                500. * 1.4 ** np.arange(1, 15)]
     mesh = discretize.TensorMesh([hx, hz], origin="CN")
@@ -65,3 +67,18 @@ def test_staircase_topography_receiver_locations_and_flat_limit():
     flat, rz, _ = terrain_geometry(mesh, d)
     np.testing.assert_array_equal(flat, mesh.cell_centers[:, 1] < 0)
     np.testing.assert_allclose(rz, 0)
+
+
+def test_full_inversion_pipeline_on_known_halfspace():
+    freq = np.array([100., 10.])
+    amp = np.sqrt(100. * freq / .2) * np.exp(1j * np.pi / 4)
+    z = np.zeros((2, 2, 2), complex)
+    z[:, 0, 1], z[:, 1, 0] = amp, -amp
+    sts = [Station(str(i), 70., 95. + .03 * i, 200., freq, z.copy(), .03 * np.abs(z) + 1e-9)
+           for i in range(2)]
+    s = Inv2DSettings(rho0=100., dx=300., z_first=50., z_core=2000.,
+                      z_growth=1.3, max_iter=2, freq_per_decade=2)
+    result = run_inversion(sts, Profile.fit("test", sts), s)
+    assert result.rms < 1.5
+    assert set(result.pred) == {"te", "tm"}
+    assert result.sens is not None and np.isfinite(result.sens).any()

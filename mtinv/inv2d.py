@@ -202,6 +202,9 @@ def prepare_data(stations, profile, s: Inv2DSettings) -> Inv2DData:
         P, ER, EP = R.copy(), R.copy(), R.copy()
         for j, st in enumerate(stations):
             sr = st.rotated(s.strike)
+            if np.isfinite(st.Zc[:, 0, 1]).any() and not np.isfinite(sr.Z[:, 0, 1]).any():
+                raise ValueError(f"{st.name}: incomplete impedance tensor cannot be rotated to "
+                                 "this strike; supply diagonal components or use its measured axes")
             r, p, er, ep = _interp_station(sr, comp, freqs)
             R[:, j], P[:, j] = r, p
             fl = s.floor_rho_tm if (mode == "tm" and s.floor_rho_tm is not None) else s.floor_rho

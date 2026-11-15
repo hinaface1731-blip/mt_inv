@@ -5,3 +5,4 @@ PySide6==6.9.1
 simpeg==0.25.0
 discretize==0.12.0
 pymatsolver==0.3.1
+

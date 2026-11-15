@@ -16,6 +16,14 @@ MU0 = 4e-7 * np.pi
 def forward_1d(rho, thick, freq):
     """Импеданс слоистой среды (СИ, Ом). rho: (N,), thick: (N-1,)."""
     rho = np.asarray(rho, float)
+    thick = np.asarray(thick, float)
+    freq = np.asarray(freq, float)
+    if rho.ndim != 1 or len(rho) == 0 or thick.shape != (len(rho) - 1,):
+        raise ValueError("rho/thickness must describe N layers and N-1 thicknesses")
+    if not np.all(np.isfinite(rho) & (rho > 0)) or not np.all(np.isfinite(thick) & (thick > 0)):
+        raise ValueError("resistivities and thicknesses must be finite and positive")
+    if freq.ndim != 1 or not np.all(np.isfinite(freq) & (freq > 0)):
+        raise ValueError("frequencies must be finite and positive")
     w = 2 * np.pi * np.asarray(freq, float)[:, None]
     k = np.sqrt(1j * w * MU0 / rho[None, :])
     Zi = 1j * w * MU0 / k  # собственный импеданс слоя
@@ -43,6 +51,8 @@ def bostick(freq, rho_a, phase):
 
 def layer_mesh(n_layers=40, z_first=10.0, z_max=50000.0):
     """Глубины кровель слоёв (логарифмически), мощности слоёв."""
+    if n_layers < 3 or int(n_layers) != n_layers or not (0 < z_first < z_max):
+        raise ValueError("mesh needs at least 3 layers and 0 < z_first < z_max")
     tops = np.r_[0.0, np.logspace(np.log10(z_first), np.log10(z_max), n_layers - 1)]
     return tops, np.diff(tops)
 
@@ -114,7 +124,7 @@ def occam_core(fwd, d, Wd, m0, R, *, max_iter=30, target_rms=1.0, lo=-3.0, hi=6.
         if best[0] < target_rms:
             # фаза 2: самая гладкая модель, достигающая целевого RMS
             ok_c = [c for c in cands if c[0] <= target_rms]
-            best = max(ok_c, key=lambda c: c[1])
+            best = min(ok_c, key=lambda c: np.sum((R @ c[2]) ** 2))
         new_rms, lam, mn, fn = best
         if new_rms > rms * 0.999 and rms > target_rms:
             # нет прогресса — делаем полшага
@@ -161,7 +171,18 @@ def occam1d(freq, rho_a, phase, erho=None, ephs=None, *, n_layers=40, z_first=No
     floor_phs — минимальная ошибка фазы в градусах.
     """
     freq = np.asarray(freq, float)
-    ok = np.isfinite(rho_a) & np.isfinite(phase) & (rho_a > 0)
+    rho_a, phase = np.asarray(rho_a, float), np.asarray(phase, float)
+    if not use_rho and not use_phase:
+        raise ValueError("select apparent resistivity and/or phase")
+    if freq.ndim != 1 or rho_a.shape != freq.shape or phase.shape != freq.shape:
+        raise ValueError("frequency, resistivity and phase arrays must have equal 1D shapes")
+    if not np.all(np.isfinite(freq) & (freq > 0)):
+        raise ValueError("frequencies must be finite and positive")
+    if floor_rho <= 0 or floor_phs <= 0 or target_rms <= 0:
+        raise ValueError("error floors and target RMS must be positive")
+    ok = np.isfinite(rho_a) & (rho_a > 0)
+    if use_phase:
+        ok &= np.isfinite(phase)
     freq, rho_a, phase = freq[ok], np.asarray(rho_a)[ok], np.asarray(phase)[ok]
     erho = np.zeros_like(rho_a) if erho is None else np.nan_to_num(np.asarray(erho)[ok])
     ephs = np.zeros_like(phase) if ephs is None else np.nan_to_num(np.asarray(ephs)[ok])
@@ -204,3 +225,4 @@ def occam1d(freq, rho_a, phase, erho=None, ephs=None, *, n_layers=40, z_first=No
     r_pred, p_pred = rho_phase_1d(10 ** m, thick, freq)
     return Occam1DResult(tops, 10 ** m, freq, rho_a, phase, erho, ephs, r_pred, p_pred,
                          rms, history)
+
