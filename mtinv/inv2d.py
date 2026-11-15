@@ -72,6 +72,7 @@ class Inv2DResult:
     settings: Inv2DSettings
     log: list = field(default_factory=list)
     sens: np.ndarray | None = None  # чувствительность ячеек (0..1), воздух = nan
+    profile: dict | None = None  # geographic origin and direction for safe CSV export
 
     def doi_mask(self, threshold=0.01):
         """True для ячеек ниже глубинности: относительная чувствительность меньше
@@ -257,10 +258,10 @@ def build_mesh(data: Inv2DData, s: Inv2DSettings, rho_bg: float):
     hx = np.r_[pad_x[::-1], hx_core, pad_x]
     x0 = x.min() - 2 * dx - pad_x.sum()
 
-    # не тоньше 5 м: тонкие ячейки у поверхности искажают нормировку
-    # чувствительности (оценку глубинности), а для АМТЗ меньше не нужно
-    z1 = s.z_first or max(skin_min / 20.0, 5.0)
-    z1 = float(np.round(z1, 1 if z1 < 10 else 0))
+    # Resolve the shortest skin depth. An arbitrary 5 m minimum can bias
+    # high-frequency AMT responses in conductive ground.
+    z1 = s.z_first or max(skin_min / 20.0, 0.1)
+    z1 = float(z1)
     relief = float(np.ptp(data.z)) if data.z is not None else 0.0
     zc = (s.z_core or (min(skin_core, max(2 * width, 10 * skin_min)) if width > 0 else skin_core)) + relief
     hz = [z1]
@@ -380,7 +381,8 @@ def run_inversion(stations, profile, s: Inv2DSettings, progress=None, stop_flag=
     if on_setup:
         rho_start = np.full(mesh.n_cells, np.nan)
         rho_start[active] = rho_bg
-        on_setup(Inv2DResult(mesh, rho_start, data, {}, [], float("nan"), core, s))
+        on_setup(Inv2DResult(mesh, rho_start, data, {}, [], float("nan"), core, s,
+                             profile=profile.to_dict()))
     reg_mesh_h = np.min(mesh.h[1][mesh.h[1] > 0])
     # веса гладкости: alpha ~ L^2, где L — характерная длина сглаживания
     reg = regularization.WeightedLeastSquares(
@@ -389,7 +391,8 @@ def run_inversion(stations, profile, s: Inv2DSettings, progress=None, stop_flag=
         alpha_y=s.smooth_z * s.reg_z_scale * float(reg_mesh_h) ** 2)
 
     opt = optimization.ProjectedGNCG(maxIter=s.max_iter, lower=np.log(1 / s.rho_max),
-                                     upper=np.log(1 / s.rho_min), cg_maxiter=s.cg_maxiter, maxIterLS=15)
+                                     upper=np.log(1 / s.rho_min), cg_maxiter=s.cg_maxiter,
+                                     cg_atol=1e-3, cg_rtol=0.0, maxIterLS=15)
     opt.remember("xc")
     inv_prob = inverse_problem.BaseInvProblem(dmis, reg, opt)
 
@@ -484,7 +487,8 @@ def run_inversion(stations, profile, s: Inv2DSettings, progress=None, stop_flag=
         sens = cell_sensitivity(misfits, m_rec, mesh, active)
     except Exception as e:  # noqa: BLE001
         say(f"Чувствительность не посчитана: {e}")
-    return Inv2DResult(mesh, rho, data, pred, rms_hist, final_rms, core, s, logs, sens)
+    return Inv2DResult(mesh, rho, data, pred, rms_hist, final_rms, core, s, logs, sens,
+                       profile=profile.to_dict())
 
 
 def forward_2d(mesh, rho_cells, x_st, freqs, modes=("te", "tm")):

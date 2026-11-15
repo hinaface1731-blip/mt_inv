@@ -427,7 +427,7 @@ class Tab2D(QtWidgets.QWidget):
         if self.doi.isChecked() and getattr(res, "sens", None) is not None:
             thr = self.doi_thr.value() / 100
             Sm = res.sens.reshape(m.shape_cells, order="F")[np.ix_(ix, iz)].T
-            shade = np.where(np.nan_to_num(Sm) < thr, 1.0, np.nan)
+            shade = np.where(np.isfinite(sub) & (np.nan_to_num(Sm) < thr), 1.0, np.nan)
             xe = m.nodes_x[ix[0]:ix[-1] + 2] / 1000
             ze = -m.nodes_y[iz[0]:iz[-1] + 2] / 1000
             ax.pcolormesh(xe, ze, shade, cmap="Greys", vmin=0, vmax=1.4, alpha=0.75, zorder=3)
@@ -437,9 +437,11 @@ class Tab2D(QtWidgets.QWidget):
                         label=f"порог чувств. {self.doi_thr.value():g} % (эвристика)")
                 ax.legend(loc="lower right", fontsize=8)
         xs = res.data.x / 1000
-        ax.plot(xs, np.zeros_like(xs), "kv", ms=7, clip_on=False, zorder=5)
-        for x, n in zip(xs, res.data.names):
-            ax.annotate(n, (x, 0), xytext=(0, 8), textcoords="offset points", fontsize=7,
+        zs = -res.data.z / 1000 if res.data.z is not None else np.zeros_like(xs)
+        ax.plot(xs, zs, "k-", lw=0.8, zorder=5)
+        ax.plot(xs, zs, "kv", ms=7, clip_on=False, zorder=5)
+        for x, z, n in zip(xs, zs, res.data.names):
+            ax.annotate(n, (x, z), xytext=(0, 8), textcoords="offset points", fontsize=7,
                         ha="center", rotation=90, annotation_clip=False)
         ax.set_ylim(zmax / 1000, 0)
         ax.set_xlim(x0 / 1000, x1 / 1000)
@@ -543,7 +545,8 @@ class Tab2D(QtWidgets.QWidget):
         x0, x1, zc, _ = res.core
         cc = m.cell_centers
         sel = (cc[:, 0] >= x0) & (cc[:, 0] <= x1) & np.isfinite(res.rho) & (cc[:, 1] >= zc)
-        p = getattr(self, "_profile", None)
+        from ..profile import Profile
+        p = Profile.from_dict(res.profile) if res.profile is not None else None
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f, delimiter=";")
             hdr = ["x_m", "depth_below_reference_m", "rho_ohmm", "elevation_reference_m"]
@@ -576,6 +579,9 @@ class Tab2D(QtWidgets.QWidget):
                  settings=json.dumps(res.settings.to_dict()))
         d["surface_z"] = res.data.z if res.data.z is not None else np.zeros(len(res.data.x))
         d["elevation_reference"] = res.data.elevation_reference
+        d["profile"] = json.dumps(res.profile)
+        d["log"] = json.dumps(res.log, ensure_ascii=False)
+        d["format_version"] = 2
         if getattr(res, "sens", None) is not None:
             d["sens"] = res.sens
         for mode in res.pred:
@@ -616,6 +622,9 @@ def load_npz(path):
             data.obs[mode] = {k: z[f"obs_{mode}_{k}"] for k in ("rho", "phs", "erho", "ephs")}
             pred[mode] = {k: z[f"pred_{mode}_{k}"] for k in ("rho", "phs")}
     return Inv2DResult(mesh, z["rho"], data, pred, list(z["rms_hist"]), float(z["rms"]),
-                       tuple(z["core"]), s, sens=z["sens"] if "sens" in z else None)
+                       tuple(z["core"]), s,
+                       log=json.loads(str(z["log"])) if "log" in z else [],
+                       sens=z["sens"] if "sens" in z else None,
+                       profile=json.loads(str(z["profile"])) if "profile" in z else None)
 
 

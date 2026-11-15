@@ -63,6 +63,7 @@ def test_staircase_topography_receiver_locations_and_flat_limit():
     assert active.any() and (~active).any()
     assert np.max(np.abs(err)) <= 100.
     assert rz[0] >= rz[1]
+    np.testing.assert_allclose(rz, [0., -100.])
     d.z[:] = 0
     flat, rz, _ = terrain_geometry(mesh, d)
     np.testing.assert_array_equal(flat, mesh.cell_centers[:, 1] < 0)

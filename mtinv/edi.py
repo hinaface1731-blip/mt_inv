@@ -95,6 +95,7 @@ def read_edi(path: str) -> Station:
 
     header = {}
     arrays = {}
+    array_headers = {}
     for kw, head, body in blocks:
         if kw in ("HEAD", "INFO", "=DEFINEMEAS", "=MTSECT"):
             kv = _kv_pairs([head] + body if kw != "INFO" else [head])
@@ -104,6 +105,7 @@ def read_edi(path: str) -> Station:
         if kw in ("END", "EMEAS", "HMEAS", "=SPECTRASECT", "SPECTRA"):
             continue
         arrays[kw] = _numbers(body)
+        array_headers[kw] = _kv_pairs([head])
 
     name = header.get("DATAID") or os.path.splitext(os.path.basename(path))[0]
     lat = _parse_angle(header.get("LAT", "")) if "LAT" in header else None
@@ -196,8 +198,44 @@ def read_edi(path: str) -> Station:
             if var is not None:
                 Terr[:, k] = np.sqrt(np.abs(var))
 
-    zrot = get("ZROT")
-    trot = get("TROT.EXP") if "TROT.EXP" in arrays else get("TROT")
+    def rotation(key):
+        if key not in arrays:
+            return None
+        a = arrays[key]
+        if len(a) == 1:
+            return np.full(nf, a[0])
+        if len(a) != nf:
+            raise ValueError(f"EDI: {key} must contain one angle or NFREQ angles")
+        return a.copy()
+
+    def component_rotation(keys, default_key):
+        angles = []
+        for key in keys:
+            if key not in arrays:
+                continue
+            ref = array_headers[key].get("ROT", default_key).upper()
+            numeric = _parse_float(ref)
+            if numeric is not None:
+                a = np.full(nf, numeric)
+            else:
+                a = rotation(ref)
+                if a is None:
+                    if "ROT" in array_headers[key]:
+                        raise ValueError(f"EDI: missing rotation block {ref}")
+                    a = np.zeros(nf)
+            angles.append(a)
+        if not angles:
+            a = rotation(default_key)
+            return np.zeros(nf) if a is None else a
+        if any(not np.allclose(a, angles[0], equal_nan=False) for a in angles[1:]):
+            raise ValueError("EDI: tensor components use inconsistent rotation frames")
+        return angles[0]
+
+    zrot = component_rotation([f"Z{c}{p}" for c in comps for p in ("R", "I")] +
+                              [f"{p}{c}" for c in comps for p in ("RHO", "PHS")], "ZROT")
+    trot = component_rotation([f"T{c}{p}{suffix}" for c in ("X", "Y")
+                               for p in ("R", "I") for suffix in ("", ".EXP")],
+                              "TROT.EXP" if "TROT.EXP" in arrays else "TROT")
 
     def geographic(values, errors, angles, tensor):
         if angles is None:

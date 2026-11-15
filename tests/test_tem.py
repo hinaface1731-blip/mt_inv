@@ -39,7 +39,7 @@ def test_halfspace_rho_tau_late_time():
 def test_read_tem_units(tmp_path):
     p = tmp_path / "z.txt"
     p.write_text("# NAME = Z1\n# TX_SIDE = 100\n# DATA = rho_tau\n# TIME_UNITS = us\n"
-                 "время;ρτ\n10;50,5\n20;51\n40;52\n")
+                 "время;ρτ\n10;50,5\n20;51\n40;52\n", encoding="utf-8")
     s = read_tem(str(p))
     assert s.name == "Z1" and np.isclose(s.times[0], 1e-5)
     assert np.allclose(s.rho_tau(), [50.5, 51, 52])
@@ -102,3 +102,4 @@ def test_loop_forward_matches_empymod():
         ref_ramp = np.array([np.sum(wu * f(ti + u * tau)) for ti in t])
         ours_ramp = LoopTEMForward(t, 100.0, 100.0, 0.0, r, ang, tau)(np.array(res), np.array(thick))
         assert np.allclose(ours_ramp, ref_ramp, rtol=2e-3)
+

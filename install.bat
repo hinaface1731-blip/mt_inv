@@ -12,17 +12,20 @@ if errorlevel 1 (
 if not exist .venv (
   echo Создаю виртуальное окружение .venv ...
   python -m venv .venv
+  if errorlevel 1 (
+    echo Не удалось создать виртуальное окружение.
+    pause
+    exit /b 1
+  )
 )
-call .venv\Scripts\activate.bat
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 if errorlevel 1 (
   echo Ошибка установки зависимостей.
   pause
   exit /b 1
 )
-echo Пробую поставить быстрый решатель Pardiso (не обязательно)...
-python -m pip install pydiso || echo Pardiso не установился - будет использован более медленный решатель.
+echo Быстрый решатель Pardiso необязателен: .venv\Scripts\python.exe -m pip install pydiso
 echo.
 echo Готово. Запускайте run.bat
 pause
+

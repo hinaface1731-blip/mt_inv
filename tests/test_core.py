@@ -101,7 +101,7 @@ EDI_RHO = textwrap.dedent("""\
 
 def test_read_z_tipper(tmp_path):
     p = tmp_path / "a.edi"
-    p.write_text(EDI_Z_TIPPER)
+    p.write_text(EDI_Z_TIPPER, encoding="utf-8")
     st = read_edi(str(p))
     assert st.name == "S01"
     assert np.isclose(st.lat, -71.5) and np.isclose(st.lon, 101.25)
@@ -123,7 +123,7 @@ def test_read_z_tipper(tmp_path):
 
 def test_read_rho_phase(tmp_path):
     p = tmp_path / "c.edi"
-    p.write_text(EDI_RHO)
+    p.write_text(EDI_RHO, encoding="utf-8")
     st = read_edi(str(p))
     rho, phs, erho, _ = st.rho_phase("xy")
     assert np.allclose(rho, 100) and np.allclose(phs, 45)
@@ -240,3 +240,4 @@ def test_stored_jacobian_single_receiver():
         J = make().getJ(m)
         dd = make().dpred(m + dm) - make().dpred(m - dm)
         assert np.abs(2 * J @ dm - dd).max() < 1e-4 * np.abs(dd).max()
+

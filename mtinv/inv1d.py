@@ -29,7 +29,12 @@ def forward_1d(rho, thick, freq):
     Zi = 1j * w * MU0 / k  # собственный импеданс слоя
     Z = Zi[:, -1]
     for n in range(len(rho) - 2, -1, -1):
-        th = np.tanh(k[:, n] * thick[n])
+        arg = k[:, n] * thick[n]
+        # For positive real(k*h) > 40, tanh is 1 to machine precision.
+        # Avoid evaluating the overflowing complex hyperbolic function there.
+        th = np.ones_like(arg)
+        finite_depth = arg.real <= 40
+        th[finite_depth] = np.tanh(arg[finite_depth])
         Z = Zi[:, n] * (Z + Zi[:, n] * th) / (Zi[:, n] + Z * th)
     return Z
 

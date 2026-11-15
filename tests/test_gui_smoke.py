@@ -38,3 +38,34 @@ def test_curves_fill_buttons():
     assert st.mask[10:11].all()
     w.close()
     app.processEvents()
+
+
+def test_result_roundtrip_preserves_topography_and_profile(tmp_path, monkeypatch):
+    import numpy as np
+    import discretize
+    from PySide6 import QtWidgets
+    from mtinv.gui.main_window import MainWindow
+    from mtinv.gui.tab2d import load_npz
+    from mtinv.inv2d import Inv2DData, Inv2DSettings, Inv2DResult
+    from mtinv.profile import Profile
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    w = MainWindow()
+    mesh = discretize.TensorMesh([np.full(3, 100.), np.full(4, 100.)], origin="CN")
+    data = Inv2DData(["a", "b"], np.array([-50., 50.]), np.array([1.]),
+                     z=np.array([0., -100.]), elevation_reference=250.)
+    profile = Profile("p", ["a", "b"], 70., 95., 70., 96.).to_dict()
+    result = Inv2DResult(mesh, np.full(mesh.n_cells, 100.), data, {}, [], 1.,
+                         (-100., 100., -300., 0.), Inv2DSettings(),
+                         log=["test log"], profile=profile)
+    w.tab2d.result = result
+    target = tmp_path / "result.npz"
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getSaveFileName", lambda *a, **kw: (str(target), ""))
+    w.tab2d.save_result()
+    loaded = load_npz(str(target))
+    np.testing.assert_allclose(loaded.data.z, data.z)
+    assert loaded.data.elevation_reference == 250.
+    assert loaded.profile == profile and loaded.log == ["test log"]
+    w.close()
+    app.processEvents()
+

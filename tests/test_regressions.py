@@ -76,6 +76,21 @@ class EDIRegressions(unittest.TestCase):
         np.testing.assert_allclose(read.rho_phase("xy")[0], st.rho_phase("xy")[0], rtol=1e-6)
         np.testing.assert_allclose(read.rho_phase("yx")[0], st.rho_phase("yx")[0], rtol=1e-6)
 
+    def test_scalar_rotation_applies_to_all_frequencies(self):
+        st = station()
+        write_edi(st.rotated(30), str(self.path))
+        text = self.path.read_text(encoding="utf-8")
+        text = text.replace(" 3.000000E+01  3.000000E+01", " 3.000000E+01")
+        self.path.write_text(text, encoding="utf-8")
+        np.testing.assert_allclose(read_edi(str(self.path)).Z, st.Z, rtol=1e-6, atol=1e-6)
+
+    def test_explicit_missing_rotation_reference_rejected(self):
+        write_edi(station(), str(self.path))
+        text = self.path.read_text(encoding="utf-8").replace("ROT=ZROT", "ROT=MISSING")
+        self.path.write_text(text, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "missing rotation block"):
+            read_edi(str(self.path))
+
     def test_invalid_and_duplicate_frequencies_rejected(self):
         st = station()
         for freq in ([0., 1.], [1., 1.], [-1., 1.]):
