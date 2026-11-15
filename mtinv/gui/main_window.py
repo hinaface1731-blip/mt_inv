@@ -399,6 +399,7 @@ class MainWindow(QtWidgets.QMainWindow):
             s2 = type(st)(st.name, st.lat, st.lon, st.elev, st.freq[~st.mask], st.Zc[~st.mask],
                           st.Zerrc[~st.mask], None if st.T is None else st.T[~st.mask],
                           None if st.Terr is None else st.Terr[~st.mask])
+            s2.zrot = st.zrot
             write_edi(s2, os.path.join(d, f"{st.name}.edi"))
         self.statusBar().showMessage(f"Записано {len(self.stations)} EDI в {d}", 5000)
 
@@ -452,3 +453,4 @@ def main(argv=None):
                     paths.append(a)
             w.load_paths(paths)
     return app.exec()
+

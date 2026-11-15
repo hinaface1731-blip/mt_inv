@@ -90,6 +90,9 @@ class _LogRhoMixin:
         return d
 
     def getJ(self, m, f=None):
+        # Assign before inspecting the cache so SimPEG invalidates both J and
+        # the log-transform flag when a caller requests a different model.
+        self.model = m
         if getattr(self, "_Jmatrix", None) is not None and getattr(self, "_J_is_log", False):
             return self._Jmatrix
         if f is None:
@@ -121,3 +124,4 @@ class FastLogTE(_LogRhoMixin, FastTE):
 
 class FastLogTM(_LogRhoMixin, FastTM):
     pass
+

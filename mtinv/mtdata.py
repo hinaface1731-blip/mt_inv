@@ -129,12 +129,30 @@ class Station:
         a = np.deg2rad(angle_deg)
         c, s = np.cos(a), np.sin(a)
         R = np.array([[c, s], [-s, c]])
-        Z = np.einsum("ik,fkl,jl->fij", R, self.Zc, R)
-        E2 = np.einsum("ik,fkl,jl->fij", R ** 2, self.Zerrc ** 2, R ** 2)
+        # Skip mathematically zero coefficients: 0 * NaN would otherwise
+        # destroy valid off-diagonal data even for a zero/90-degree rotation.
+        # At oblique angles missing tensor entries remain missing; inventing
+        # zero diagonals would silently impose an unjustified 1D/2D model.
+        Z = np.zeros_like(self.Zc)
+        E2 = np.zeros_like(self.Zerrc)
+        for i in range(2):
+            for j in range(2):
+                for k in range(2):
+                    for l in range(2):
+                        weight = R[i, k] * R[j, l]
+                        if abs(weight) > 1e-14:
+                            Z[:, i, j] += weight * self.Zc[:, k, l]
+                            E2[:, i, j] += weight ** 2 * self.Zerrc[:, k, l] ** 2
         T = Terr = None
         if self.T is not None:
-            T = np.einsum("fk,jk->fj", self.T, R)
-            Terr = np.sqrt(np.einsum("fk,jk->fj", self.Terr ** 2, R ** 2))
+            T = np.zeros_like(self.T)
+            Terr = np.zeros_like(self.Terr)
+            for j in range(2):
+                for k in range(2):
+                    if abs(R[j, k]) > 1e-14:
+                        T[:, j] += R[j, k] * self.T[:, k]
+                        Terr[:, j] += R[j, k] ** 2 * self.Terr[:, k] ** 2
+            Terr = np.sqrt(Terr)
         return Station(self.name, self.lat, self.lon, self.elev, self.freq.copy(), Z,
                        np.sqrt(E2), T, Terr, self.path, self.zrot + angle_deg,
                        self.mask.copy(), filled=self.filled.copy())
@@ -434,3 +452,4 @@ def unfill_gaps(st: Station):
     st.filled = np.zeros(len(st.freq), bool)
     st._orig = None
     return n
+

@@ -44,6 +44,7 @@ class Inv2DSettings:
     cg_maxiter: int = 20
     reg_x_scale: float = 1.0      # служебные множители (для подбора)
     reg_z_scale: float = 4.0
+    use_topography: bool = True  # staircase surface from station elevations
 
     def to_dict(self):
         return asdict(self)
@@ -55,6 +56,8 @@ class Inv2DData:
     x: np.ndarray                 # положение станций вдоль профиля, м
     freqs: np.ndarray             # частоты инверсии
     obs: dict = field(default_factory=dict)  # mode -> dict(rho, phs, erho, ephs) (nf, nst)
+    z: np.ndarray | None = None  # elevations relative to highest station, m
+    elevation_reference: float = 0.0
 
 
 @dataclass
@@ -95,9 +98,10 @@ class Inv2DResult:
 def cell_sensitivity(misfits, model, mesh, active):
     """Нормированная чувствительность Σ|W·J| / площадь ячейки (по всем данным).
 
-    Сглаживается по соседним ячейкам и нормируется так, чтобы 1 = 99-й
-    процентиль; используется для оценки глубинности (ниже ~1 % модель
-    определяется регуляризацией, а не данными)."""
+    Сглаживается и нормируется по 99-му процентилю. Это эвристический
+    индикатор покрытия данными, не оценка разрешения или достоверности.
+    Порог зависит от сетки и нормировки; проверяйте альтернативные модели.
+    """
     tot = np.zeros(int(active.sum()))
     for mf in misfits:
         J = mf.simulation.getJ(model)
@@ -114,6 +118,8 @@ def cell_sensitivity(misfits, model, mesh, active):
     Sf[~np.isfinite(S)] = np.nan
     v = Sf[np.isfinite(Sf)]
     ref = np.percentile(v, 99) if len(v) else 1.0
+    if not np.isfinite(ref) or ref <= 0:
+        return np.where(active, 0.0, np.nan)
     return (Sf / ref).reshape(-1, order="F")
 
 
@@ -148,6 +154,18 @@ def _interp_station(st, comp, freqs):
 
 def prepare_data(stations, profile, s: Inv2DSettings) -> Inv2DData:
     """stations — список Station в порядке профиля."""
+    if not stations:
+        raise ValueError("no stations selected")
+    if not s.modes or any(m not in ("te", "tm") for m in s.modes) or len(set(s.modes)) != len(s.modes):
+        raise ValueError("select distinct TE/TM modes")
+    if s.floor_rho <= 0 or s.floor_phs <= 0 or s.freq_per_decade < 1:
+        raise ValueError("error floors and frequency density must be positive")
+    if s.floor_rho_tm is not None and s.floor_rho_tm <= 0:
+        raise ValueError("TM error floor must be positive")
+    if not (0 < s.rho_min < s.rho_max) or not (0 < s.beta_min_ratio <= 1) or s.cooling_factor <= 1:
+        raise ValueError("invalid resistance bounds or cooling settings")
+    if s.z_growth <= 1 or any(v is not None and v <= 0 for v in (s.dx, s.z_first, s.z_core, s.rho0)):
+        raise ValueError("mesh dimensions must be positive and z_growth > 1")
     along = []
     for st in stations:
         a, _ = profile.project(st.lat, st.lon)
@@ -156,19 +174,28 @@ def prepare_data(stations, profile, s: Inv2DSettings) -> Inv2DData:
     order = np.argsort(along)
     stations = [stations[i] for i in order]
     along = along[order]
-    # совпадающие точки слегка разнесём
-    for i in range(1, len(along)):
-        if along[i] - along[i - 1] < 1.0:
-            along[i] = along[i - 1] + 1.0
+    if not np.all(np.isfinite(along)):
+        raise ValueError("station coordinates must be finite")
+    if np.any(np.diff(along) < 1.0):
+        raise ValueError("stations project within 1 m: resolve duplicates before inversion")
 
     fall = np.concatenate([st.freq[~st.mask] for st in stations])
+    if len(fall) == 0 or not np.all(np.isfinite(fall) & (fall > 0)):
+        raise ValueError("no valid positive unmasked frequencies")
     fmax = s.fmax or fall.max()
     fmin = s.fmin or fall.min()
+    if not (0 < fmin < fmax):
+        raise ValueError("frequency range must satisfy 0 < fmin < fmax")
     nd = max(np.log10(fmax / fmin), 0.1)
     nf = max(int(round(nd * s.freq_per_decade)) + 1, 2)
     freqs = np.logspace(np.log10(fmax), np.log10(fmin), nf)
 
     data = Inv2DData([st.name for st in stations], along, freqs)
+    elev = np.array([st.elev for st in stations], float)
+    if s.use_topography and not np.all(np.isfinite(elev)):
+        raise ValueError("topography needs finite elevations for every station")
+    data.elevation_reference = float(elev.max()) if s.use_topography else 0.0
+    data.z = elev - data.elevation_reference if s.use_topography else np.zeros(len(stations))
     for mode in s.modes:
         comp = "xy" if mode == "te" else "yx"
         R = np.full((nf, len(stations)), np.nan)
@@ -186,6 +213,8 @@ def prepare_data(stations, profile, s: Inv2DSettings) -> Inv2DData:
 
 # ----------------------------------------------------------------------
 def _pad(h0, factor, total):
+    if h0 <= 0 or factor <= 1 or not np.all(np.isfinite([h0, factor, total])):
+        raise ValueError("invalid padding parameters")
     out = []
     acc = 0.0
     h = h0
@@ -229,7 +258,8 @@ def build_mesh(data: Inv2DData, s: Inv2DSettings, rho_bg: float):
     # чувствительности (оценку глубинности), а для АМТЗ меньше не нужно
     z1 = s.z_first or max(skin_min / 20.0, 5.0)
     z1 = float(np.round(z1, 1 if z1 < 10 else 0))
-    zc = s.z_core or (min(skin_core, max(2 * width, 10 * skin_min)) if width > 0 else skin_core)
+    relief = float(np.ptp(data.z)) if data.z is not None else 0.0
+    zc = (s.z_core or (min(skin_core, max(2 * width, 10 * skin_min)) if width > 0 else skin_core)) + relief
     hz = [z1]
     while sum(hz) < zc:
         hz.append(hz[-1] * s.z_growth)
@@ -241,6 +271,30 @@ def build_mesh(data: Inv2DData, s: Inv2DSettings, rho_bg: float):
     mesh = discretize.TensorMesh([hx, hz_all], origin=[x0, -hz_g.sum()])
     core = (x.min() - 2 * dx, x.max() + 2 * dx, -float(hz.sum()), 0.0)
     return mesh, core
+
+
+def terrain_geometry(mesh, data):
+    """Active earth and receiver heights on the staircase mesh surface.
+
+    Elevations are interpolated along the profile and held constant in the
+    padding. Receivers are placed at the top face of their earth column,
+    avoiding interpolation through air. Returns snapping errors for logging.
+    """
+    z = np.zeros(len(data.x)) if data.z is None else data.z
+    cc = mesh.cell_centers
+    surface = np.interp(cc[:, 0], data.x, z)
+    active = cc[:, 1] < surface
+    nx, nz = mesh.shape_cells
+    earth = active.reshape((nx, nz), order="F")
+    heights = np.empty(nx)
+    for i in range(nx):
+        inds = np.flatnonzero(earth[i])
+        if len(inds) == 0:
+            raise ValueError("mesh does not extend below topography")
+        heights[i] = mesh.nodes_y[inds[-1] + 1]
+    cols = np.clip(np.searchsorted(mesh.nodes_x, data.x, side="right") - 1, 0, nx - 1)
+    rx_z = heights[cols]
+    return active, rx_z, rx_z - z
 
 
 # ----------------------------------------------------------------------
@@ -272,7 +326,10 @@ def run_inversion(stations, profile, s: Inv2DSettings, progress=None, stop_flag=
     say(f"Сетка: {mesh.shape_cells[0]} x {mesh.shape_cells[1]} ячеек, "
         f"частот: {len(data.freqs)}, стартовая модель {rho_bg:.1f} Ом·м")
 
-    active = mesh.cell_centers[:, 1] < 0
+    active, receiver_z, snap = terrain_geometry(mesh, data)
+    say(f"Topography: {'on' if s.use_topography else 'off'}, elevation reference "
+        f"{data.elevation_reference:.1f} m; max surface snapping {np.abs(snap).max():.1f} m")
+    say("Sensitivity shading is a mesh-dependent heuristic, not a resolution/DOI confidence bound")
     n_act = int(active.sum())
     sigma_map = maps.ExpMap(mesh) * maps.InjectActiveCells(mesh, active, np.log(1e-8))
     solver = get_default_solver()
@@ -288,7 +345,7 @@ def run_inversion(stations, profile, s: Inv2DSettings, progress=None, stop_flag=
             ok = np.isfinite(ob["rho"][i]) & np.isfinite(ob["phs"][i])
             if not ok.any():
                 continue
-            loc = np.c_[data.x[ok], np.zeros(ok.sum())]
+            loc = np.c_[data.x[ok], receiver_z[ok]]
             rxs = [nsem.receivers.Impedance(loc, orientation=ori, component="apparent_resistivity",
                                            storeProjections=True),
                    nsem.receivers.Impedance(loc, orientation=ori, component="phase",
@@ -450,3 +507,4 @@ def forward_2d(mesh, rho_cells, x_st, freqs, modes=("te", "tm")):
         ph = np.where(ph > 180, ph - 360, ph)
         out[mode] = dict(rho=d[:, 0], phs=ph)
     return out
+

@@ -131,6 +131,10 @@ def read_edi(path: str) -> Station:
         raise ValueError("в файле нет блока >FREQ")
     freq = arrays["FREQ"]
     nf = len(freq)
+    if nf == 0 or not np.all(np.isfinite(freq) & (freq > 0)):
+        raise ValueError("EDI: frequencies must be finite and strictly positive")
+    if len(np.unique(freq)) != nf:
+        raise ValueError("EDI: duplicate frequencies are ambiguous")
 
     def get(key):
         a = arrays.get(key)
@@ -193,6 +197,39 @@ def read_edi(path: str) -> Station:
                 Terr[:, k] = np.sqrt(np.abs(var))
 
     zrot = get("ZROT")
+    trot = get("TROT.EXP") if "TROT.EXP" in arrays else get("TROT")
+
+    def geographic(values, errors, angles, tensor):
+        if angles is None:
+            return values, errors
+        if not np.all(np.isfinite(angles)):
+            raise ValueError("EDI: invalid rotation angles")
+        # R(theta) maps geographic components into the measurement frame.
+        # Undo each frequency's rotation independently, including TROT.
+        out, err = values.copy(), errors.copy()
+        for q, angle in enumerate(angles):
+            a = np.deg2rad(-angle)
+            c, sn = np.cos(a), np.sin(a)
+            R = np.array([[c, sn], [-sn, c]])
+            out[q] = 0
+            err[q] = 0
+            for i in range(2):
+                for k in range(2):
+                    if tensor:
+                        for j in range(2):
+                            for l in range(2):
+                                w = R[i, k] * R[j, l]
+                                if abs(w) > 1e-14:
+                                    out[q, i, j] += w * values[q, k, l]
+                                    err[q, i, j] += w ** 2 * errors[q, k, l] ** 2
+                    elif abs(R[i, k]) > 1e-14:
+                        out[q, i] += R[i, k] * values[q, k]
+                        err[q, i] += R[i, k] ** 2 * errors[q, k] ** 2
+        return out, np.sqrt(err)
+
+    Z, Zerr = geographic(Z, Zerr, zrot, True)
+    if have_t:
+        T, Terr = geographic(T, Terr, trot, False)
     st = Station(
         name=str(name),
         lat=lat if lat is not None else np.nan,
@@ -204,7 +241,7 @@ def read_edi(path: str) -> Station:
         T=T if have_t else None,
         Terr=Terr if have_t else None,
         path=path,
-        zrot=float(np.nanmedian(zrot)) if zrot is not None and np.any(np.isfinite(zrot)) else 0.0,
+        zrot=0.0,  # all imported components are now in geographic coordinates
     )
     st.sort()
     return st
@@ -228,17 +265,21 @@ def _dms(val: float) -> str:
 
 def write_edi(st: Station, path: str):
     nf = len(st.freq)
+    if not np.isfinite(st.zrot):
+        raise ValueError("EDI: invalid station rotation")
     out = [">HEAD", f'  DATAID="{st.name}"', f"  LAT={_dms(st.lat)}",
            f"  LONG={_dms(st.lon)}", f"  ELEV={st.elev:.1f}", '  PROGVERS="MT-Inv"', "",
            ">INFO", "", ">=DEFINEMEAS", f"  REFLAT={_dms(st.lat)}", f"  REFLONG={_dms(st.lon)}",
            f"  REFELEV={st.elev:.1f}", "", ">=MTSECT", f"  NFREQ={nf}", "",
-           f">FREQ //{nf}", _fmt_block(st.freq), f">ZROT //{nf}", _fmt_block(np.zeros(nf))]
+           f">FREQ //{nf}", _fmt_block(st.freq), f">ZROT //{nf}",
+           _fmt_block(np.full(nf, st.zrot))]
     comps = {"XX": (0, 0), "XY": (0, 1), "YX": (1, 0), "YY": (1, 1)}
     for c, (i, j) in comps.items():
-        out += [f">Z{c}R ROT=ZROT //{nf}", _fmt_block(st.Z[:, i, j].real),
-                f">Z{c}I ROT=ZROT //{nf}", _fmt_block(st.Z[:, i, j].imag),
-                f">Z{c}.VAR ROT=ZROT //{nf}", _fmt_block(st.Zerr[:, i, j] ** 2)]
+        out += [f">Z{c}R ROT=ZROT //{nf}", _fmt_block(st.Zc[:, i, j].real),
+                f">Z{c}I ROT=ZROT //{nf}", _fmt_block(st.Zc[:, i, j].imag),
+                f">Z{c}.VAR ROT=ZROT //{nf}", _fmt_block(st.Zerrc[:, i, j] ** 2)]
     if st.T is not None:
+        out += [f">TROT.EXP //{nf}", _fmt_block(np.full(nf, st.zrot))]
         for k, c in enumerate(("X", "Y")):
             out += [f">T{c}R.EXP //{nf}", _fmt_block(st.T[:, k].real),
                     f">T{c}I.EXP //{nf}", _fmt_block(st.T[:, k].imag),
@@ -246,3 +287,4 @@ def write_edi(st: Station, path: str):
     out.append(">END")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out) + "\n")
+

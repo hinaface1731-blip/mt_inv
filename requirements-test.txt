@@ -1,0 +1,3 @@
+-r requirements.txt
+pytest==8.4.1
+empymod==2.5.2

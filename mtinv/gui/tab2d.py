@@ -87,6 +87,10 @@ class Tab2D(QtWidgets.QWidget):
         self.zcore = dspin(0, 1000, 0, 1, 1, " км")
         self.zcore.setSpecialValueText("авто")
         form.addRow("Глубина обл.:", self.zcore)
+        self.topography = QtWidgets.QCheckBox("учитывать отметки станций")
+        self.topography.setChecked(True)
+        self.topography.setToolTip("Ступенчатая поверхность; проверьте отметки EDI. Глубины отсчитываются от максимальной отметки.")
+        form.addRow("Рельеф:", self.topography)
         self.niter = ispin(1, 200, 15)
         form.addRow("Макс. итераций:", self.niter)
         self.smx = dspin(0.01, 100, 1.0, 0.5, 2)
@@ -159,10 +163,10 @@ class Tab2D(QtWidgets.QWidget):
         sec_ctl.addWidget(self.smooth)
         self.equal = QtWidgets.QCheckBox("1:1")
         sec_ctl.addWidget(self.equal)
-        self.doi = QtWidgets.QCheckBox("затенять ниже глубинности")
+        self.doi = QtWidgets.QCheckBox("затенять слабую чувствительность")
         self.doi.setChecked(True)
         self.doi.setToolTip("Ячейки, чувствительность которых к данным меньше порога, затеняются: "
-                            "там модель определяется регуляризацией, а не данными")
+                            "эвристика зависит от сетки и не доказывает разрешённость структуры")
         sec_ctl.addWidget(self.doi)
         self.doi_thr = dspin(0.01, 50, 1.0, 0.5, 2, " %")
         self.doi_thr.setToolTip("Порог относительной чувствительности")
@@ -300,6 +304,7 @@ class Tab2D(QtWidgets.QWidget):
     def settings(self):
         modes = tuple(m for m, b in (("te", self.te), ("tm", self.tm)) if b.isChecked())
         return Inv2DSettings(
+            use_topography=self.topography.isChecked(),
             modes=modes, strike=self.strike.value(), floor_rho=self.frho.value() / 100,
             floor_rho_tm=(self.frho_tm.value() / 100) or None,
             floor_phs=self.fphs.value(), freq_per_decade=self.fpd.value(),
@@ -429,7 +434,7 @@ class Tab2D(QtWidgets.QWidget):
             dd = res.doi_depth(thr)
             if dd is not None:
                 ax.plot(m.cell_centers_x[ix] / 1000, dd[ix] / 1000, "k--", lw=1, zorder=4,
-                        label=f"глубинность (чувств. {self.doi_thr.value():g} %)")
+                        label=f"порог чувств. {self.doi_thr.value():g} % (эвристика)")
                 ax.legend(loc="lower right", fontsize=8)
         xs = res.data.x / 1000
         ax.plot(xs, np.zeros_like(xs), "kv", ms=7, clip_on=False, zorder=5)
@@ -439,7 +444,7 @@ class Tab2D(QtWidgets.QWidget):
         ax.set_ylim(zmax / 1000, 0)
         ax.set_xlim(x0 / 1000, x1 / 1000)
         ax.set_xlabel("Расстояние по профилю, км")
-        ax.set_ylabel("Глубина, км")
+        ax.set_ylabel(f"Глубина от отметки {res.data.elevation_reference:g} м, км")
         if self.equal.isChecked():
             ax.set_aspect("equal")
         modes = "+".join(mo.upper() for mo in res.settings.modes)
@@ -537,11 +542,11 @@ class Tab2D(QtWidgets.QWidget):
         m = res.mesh
         x0, x1, zc, _ = res.core
         cc = m.cell_centers
-        sel = (cc[:, 0] >= x0) & (cc[:, 0] <= x1) & (cc[:, 1] < 0) & (cc[:, 1] >= zc)
+        sel = (cc[:, 0] >= x0) & (cc[:, 0] <= x1) & np.isfinite(res.rho) & (cc[:, 1] >= zc)
         p = getattr(self, "_profile", None)
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f, delimiter=";")
-            hdr = ["x_m", "depth_m", "rho_ohmm"]
+            hdr = ["x_m", "depth_below_reference_m", "rho_ohmm", "elevation_reference_m"]
             if p is not None:
                 hdr += ["lat", "lon"]
             w.writerow(hdr)
@@ -550,7 +555,7 @@ class Tab2D(QtWidgets.QWidget):
                 ex, ey = to_local(p.lat1, p.lon1, p.lat0, p.lon0)
                 L = max(np.hypot(ex, ey), 1e-9)
             for (x, y), r in zip(cc[sel], res.rho[sel]):
-                row = [f"{x:.1f}", f"{-y:.1f}", f"{r:.5g}"]
+                row = [f"{x:.1f}", f"{-y:.1f}", f"{r:.5g}", f"{res.data.elevation_reference:.1f}"]
                 if p is not None:
                     la, lo = from_local(x * ex / L, x * ey / L, p.lat0, p.lon0)
                     row += [f"{float(la):.6f}", f"{float(lo):.6f}"]
@@ -569,6 +574,8 @@ class Tab2D(QtWidgets.QWidget):
                  x=res.data.x, freqs=res.data.freqs, names=np.array(res.data.names),
                  core=np.array(res.core), rms=res.rms, rms_hist=np.array(res.rms_history),
                  settings=json.dumps(res.settings.to_dict()))
+        d["surface_z"] = res.data.z if res.data.z is not None else np.zeros(len(res.data.x))
+        d["elevation_reference"] = res.data.elevation_reference
         if getattr(res, "sens", None) is not None:
             d["sens"] = res.sens
         for mode in res.pred:
@@ -601,6 +608,8 @@ def load_npz(path):
     s = Inv2DSettings(**{k: (tuple(v) if isinstance(v, list) else v)
                          for k, v in json.loads(str(z["settings"])).items()})
     data = Inv2DData([str(n) for n in z["names"]], z["x"], z["freqs"])
+    data.z = z["surface_z"] if "surface_z" in z else np.zeros(len(data.x))
+    data.elevation_reference = float(z["elevation_reference"]) if "elevation_reference" in z else 0.0
     pred = {}
     for mode in s.modes:
         if f"obs_{mode}_rho" in z:
@@ -608,4 +617,5 @@ def load_npz(path):
             pred[mode] = {k: z[f"pred_{mode}_{k}"] for k in ("rho", "phs")}
     return Inv2DResult(mesh, z["rho"], data, pred, list(z["rms_hist"]), float(z["rms"]),
                        tuple(z["core"]), s, sens=z["sens"] if "sens" in z else None)
+
 
