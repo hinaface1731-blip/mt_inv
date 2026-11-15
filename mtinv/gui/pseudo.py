@@ -6,7 +6,7 @@ import numpy as np
 from matplotlib.colors import LogNorm
 from PySide6 import QtWidgets
 
-from .common import CMAPS, MplWidget, dspin
+from .common import CMAPS, MplWidget, dspin, FlowLayout
 
 
 def profile_grid(stations, profile, comp, rot=0.0):
@@ -52,7 +52,7 @@ class PseudoTab(QtWidgets.QWidget):
         super().__init__()
         self.main = main
         self.plot = MplWidget(self)
-        ctl = QtWidgets.QHBoxLayout()
+        ctl = FlowLayout()
         ctl.addWidget(QtWidgets.QLabel("Профиль:"))
         self.prof = QtWidgets.QComboBox()
         self.prof.setMinimumWidth(120)
@@ -124,3 +124,4 @@ class PseudoTab(QtWidgets.QWidget):
         axes[0, 0].invert_yaxis()
         fig.suptitle(f"{p.name}: азимут {p.azimuth:.0f}°, длина {p.length / 1000:.1f} км")
         self.plot.draw()
+

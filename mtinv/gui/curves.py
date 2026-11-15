@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from PySide6 import QtCore, QtWidgets
 
-from .common import COLORS, MplWidget, dspin
+from .common import COLORS, MplWidget, dspin, FlowLayout, CollapsiblePanel
 
 
 class CurvesTab(QtWidgets.QWidget):
@@ -17,7 +17,7 @@ class CurvesTab(QtWidgets.QWidget):
         self.station = None
         self.plot = MplWidget(self)
 
-        ctl = QtWidgets.QHBoxLayout()
+        ctl = FlowLayout()
         self.cb = {}
         for c, on in [("xy", True), ("yx", True), ("det", False), ("ssq", False),
                       ("xx", False), ("yy", False)]:
@@ -32,22 +32,22 @@ class CurvesTab(QtWidgets.QWidget):
         self.rot = dspin(-180, 180, 0.0, 5, 1, "°")
         self.rot.valueChanged.connect(self.redraw)
         ctl.addWidget(self.rot)
-        self.show_masked = QtWidgets.QCheckBox("показывать исключённые")
+        self.show_masked = QtWidgets.QCheckBox("Исключённые точки")
         self.show_masked.setChecked(True)
         self.show_masked.toggled.connect(self.redraw)
         ctl.addWidget(self.show_masked)
         b = QtWidgets.QPushButton("Сбросить исключения")
         b.clicked.connect(self.reset_mask)
         ctl.addWidget(b)
-        b = QtWidgets.QPushButton("Автоотбраковка (все станции)")
-        b.setToolTip("Исключить частоты с ошибкой ρa > ~100 %, фазой вне 0–90° "
+        b = QtWidgets.QPushButton("Автоотбраковка")
+        b.setToolTip("Для всех станций: исключить частоты с ошибкой ρa > ~100 %, фазой вне 0–90° "
                      "и резкими выбросами относительно соседних частот (XY и YX)")
         b.clicked.connect(self.auto_clean)
         ctl.addWidget(b)
         ctl.addStretch(1)
 
-        ctl3 = QtWidgets.QHBoxLayout()
-        b = QtWidgets.QPushButton("Заполнить пропуски прямой (все станции)")
+        ctl3 = FlowLayout()
+        b = QtWidgets.QPushButton("Заполнить пропуски")
         b.setToolTip("Исключённые точки внутри коротких пропусков (например, «мёртвая зона» "
                      "1–5 кГц) заменяются прямой по lg f, проведённой по 3 хорошим точкам "
                      "с каждой стороны. Ошибка восстановленных точек увеличивается. "
@@ -70,7 +70,7 @@ class CurvesTab(QtWidgets.QWidget):
         ctl3.addWidget(hint3)
         ctl3.addStretch(1)
 
-        ctl2 = QtWidgets.QHBoxLayout()
+        ctl2 = FlowLayout()
         ctl2.addWidget(QtWidgets.QLabel("Статический сдвиг (множитель ρa):  XY ×"))
         self.ssx = dspin(0.001, 1000, 1.0, 0.05, 3)
         ctl2.addWidget(self.ssx)
@@ -91,10 +91,11 @@ class CurvesTab(QtWidgets.QWidget):
             "Щелчок по точке на графике rho/фазы — исключить/вернуть эту частоту "
             "(для всех компонент). Исключённые точки не идут в инверсию.")
         hint.setStyleSheet("color: gray")
+        hint.setWordWrap(True)
         lay = QtWidgets.QVBoxLayout(self)
         lay.addLayout(ctl)
-        lay.addLayout(ctl3)
-        lay.addLayout(ctl2)
+        self.corrections = CollapsiblePanel("Коррекция и заполнение пропусков · все станции", [ctl3, ctl2])
+        lay.addWidget(self.corrections)
         lay.addWidget(hint)
         lay.addWidget(self.plot, 1)
         self.plot.canvas.mpl_connect("button_press_event", self.on_click)
@@ -253,3 +254,4 @@ class CurvesTab(QtWidgets.QWidget):
         aell.grid(True, which="both", alpha=0.3)
         aell.legend(fontsize=7)
         self.plot.draw()
+

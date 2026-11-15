@@ -152,10 +152,10 @@ class TabTEM(QtWidgets.QWidget):
         self.plot = MplWidget(self)
 
         left = QtWidgets.QVBoxLayout()
-        b = QtWidgets.QPushButton("📂 Загрузить ЗСБ (файлы)…")
+        b = QtWidgets.QPushButton("Загрузить файлы ЗСБ…")
         b.clicked.connect(self.load_files)
         left.addWidget(b)
-        b = QtWidgets.QPushButton("📁 Папка «Цикл» (*.pod)…")
+        b = QtWidgets.QPushButton("Импорт «Цикл» (*.pod)…")
         b.clicked.connect(self.load_pod_folder)
         left.addWidget(b)
         left.addWidget(QtWidgets.QLabel("Зондирования ЗСБ → МТ-станция:"))
@@ -225,10 +225,12 @@ class TabTEM(QtWidgets.QWidget):
         self.inv_ss = QtWidgets.QCheckBox("подбирать статический сдвиг АМТЗ")
         self.inv_ss.setChecked(True)
         jl.addWidget(self.inv_ss)
-        b = QtWidgets.QPushButton("▶ Совместная инверсия")
+        b = QtWidgets.QPushButton("Совместная инверсия")
+        b.setProperty("role", "primary")
         b.clicked.connect(lambda: self.run(["Совместная"]))
         jl.addWidget(b)
-        b = QtWidgets.QPushButton("▶ Сравнить: АМТЗ / ЗСБ / совместная")
+        b = QtWidgets.QPushButton("Сравнить три модели")
+        b.setToolTip("Раздельная инверсия АМТЗ, ЗСБ и совместная модель")
         b.setToolTip("Три инверсии на одной сетке — видно, как совместная инверсия "
                      "снимает эквивалентность")
         b.clicked.connect(lambda: self.run(["АМТЗ", "ЗСБ", "Совместная"]))
@@ -724,4 +726,5 @@ def auto_link(tems, stations, max_dist):
             snd.link = best
             n += 1
     return n
+
 

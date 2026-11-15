@@ -11,7 +11,7 @@ from PySide6 import QtWidgets
 
 from ..inv2d import Inv2DSettings, run_inversion
 from ..mtdata import median_strike
-from .common import CMAPS, MplWidget, dspin, error_box, ispin, start_worker
+from .common import CMAPS, MplWidget, dspin, error_box, ispin, start_worker, FlowLayout, section_label
 
 
 class Tab2D(QtWidgets.QWidget):
@@ -24,6 +24,8 @@ class Tab2D(QtWidgets.QWidget):
 
         # ---- параметры
         form = QtWidgets.QFormLayout()
+        form.setVerticalSpacing(10)
+        form.addRow(section_label("Наблюдения"))
         self.prof = QtWidgets.QComboBox()
         self.prof.currentIndexChanged.connect(self.auto_strike_profile)
         form.addRow("Профиль:", self.prof)
@@ -49,7 +51,7 @@ class Tab2D(QtWidgets.QWidget):
         srow.addWidget(b)
         form.addRow("Простирание:", srow)
         nrow = QtWidgets.QHBoxLayout()
-        b = QtWidgets.QPushButton("Нормализация уровня…")
+        b = QtWidgets.QPushButton("Нормализация…")
         b.setToolTip("Статистическая коррекция статического сдвига: уровень ρa на выбранном "
                      "периоде сравнивается с медианой соседей по профилю "
                      "(как на Горном Таймыре, Пальшин, Яковлев и др., 2017)")
@@ -59,6 +61,7 @@ class Tab2D(QtWidgets.QWidget):
         b.clicked.connect(self.reset_shifts)
         nrow.addWidget(b)
         form.addRow("Стат. сдвиг:", nrow)
+        form.addRow(section_label("Ошибки и диапазон"))
         self.frho = dspin(1, 100, 10, 1, 0, " %")
         form.addRow("Мин. ошибка ρa:", self.frho)
         self.frho_tm = dspin(0, 1000, 0, 10, 0, " %")
@@ -79,6 +82,7 @@ class Tab2D(QtWidgets.QWidget):
         prow.addWidget(QtWidgets.QLabel("–"))
         prow.addWidget(self.tmax)
         form.addRow("Периоды, с:", prow)
+        form.addRow(section_label("Модель и регуляризация"))
         self.rho0 = dspin(0, 1e5, 0, 10, 1, " Ом·м")
         self.rho0.setSpecialValueText("авто (медиана)")
         form.addRow("Старт. модель:", self.rho0)
@@ -101,9 +105,11 @@ class Tab2D(QtWidgets.QWidget):
         self.beta.setToolTip("Начальное отношение beta0 (больше — более гладкий старт)")
         form.addRow("β0 ratio:", self.beta)
 
-        self.run_btn = QtWidgets.QPushButton("▶ Запустить 2D инверсию")
+        self.run_btn = QtWidgets.QPushButton("Запустить 2D-инверсию")
+        self.run_btn.setProperty("role", "primary")
         self.run_btn.clicked.connect(self.run)
-        self.stop_btn = QtWidgets.QPushButton("■ Стоп")
+        self.stop_btn = QtWidgets.QPushButton("Остановить")
+        self.stop_btn.setProperty("role", "danger")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self.stop)
         self.status = QtWidgets.QLabel("")
@@ -111,9 +117,11 @@ class Tab2D(QtWidgets.QWidget):
         self.logw = QtWidgets.QPlainTextEdit()
         self.logw.setReadOnly(True)
         self.logw.setMaximumBlockCount(2000)
+        self.logw.setPlaceholderText("Здесь появятся этапы расчёта и значения RMS")
+        self.logw.setMinimumHeight(110)
 
-        brow = QtWidgets.QHBoxLayout()
-        b = QtWidgets.QPushButton("Сохранить результат…")
+        brow = FlowLayout()
+        b = QtWidgets.QPushButton("Сохранить…")
         b.clicked.connect(self.save_result)
         brow.addWidget(b)
         b = QtWidgets.QPushButton("Открыть…")
@@ -123,11 +131,10 @@ class Tab2D(QtWidgets.QWidget):
         b2.clicked.connect(self.export_csv)
 
         left = QtWidgets.QVBoxLayout()
+        left.setSpacing(12)
         left.addLayout(form)
-        r = QtWidgets.QHBoxLayout()
-        r.addWidget(self.run_btn, 1)
-        r.addWidget(self.stop_btn)
-        left.addLayout(r)
+        left.addWidget(self.run_btn)
+        left.addWidget(self.stop_btn)
         left.addWidget(self.status)
         left.addWidget(self.logw, 1)
         left.addLayout(brow)
@@ -136,13 +143,14 @@ class Tab2D(QtWidgets.QWidget):
         lw.setLayout(left)
         lw.setMaximumWidth(360)
         scroll = QtWidgets.QScrollArea()
+        scroll.setObjectName("parameterScroll")
         scroll.setWidget(lw)
         scroll.setWidgetResizable(True)
         scroll.setMaximumWidth(380)
 
         # ---- графики
         self.sec = MplWidget(self)
-        sec_ctl = QtWidgets.QHBoxLayout()
+        sec_ctl = FlowLayout()
         sec_ctl.addWidget(QtWidgets.QLabel("Палитра:"))
         self.cmap = QtWidgets.QComboBox()
         self.cmap.addItems(CMAPS)

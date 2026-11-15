@@ -9,7 +9,7 @@ from matplotlib.colors import LogNorm
 from PySide6 import QtWidgets
 
 from ..inv1d import bostick, occam1d
-from .common import CMAPS, MplWidget, dspin, error_box, ispin, start_worker
+from .common import CMAPS, MplWidget, dspin, error_box, ispin, start_worker, section_label
 
 COMPS = [("det", "Det (инвариант)"), ("ssq", "SSQ"), ("xy", "XY"), ("yx", "YX"), ("av", "(XY−YX)/2")]
 
@@ -23,6 +23,8 @@ class Tab1D(QtWidgets.QWidget):
         self.plot = MplWidget(self)
 
         form = QtWidgets.QFormLayout()
+        form.setVerticalSpacing(10)
+        form.addRow(section_label("Параметры модели"))
         self.comp = QtWidgets.QComboBox()
         for k, t in COMPS:
             self.comp.addItem(t, k)
@@ -47,10 +49,12 @@ class Tab1D(QtWidgets.QWidget):
         self.use.addItems(["ρa + фаза", "только фаза", "только ρa"])
         form.addRow("Данные:", self.use)
 
-        b1 = QtWidgets.QPushButton("▶ Инверсия текущей станции")
+        b1 = QtWidgets.QPushButton("Рассчитать текущую станцию")
+        b1.setProperty("role", "primary")
         b1.clicked.connect(self.run_one)
         self.prof = QtWidgets.QComboBox()
-        b2 = QtWidgets.QPushButton("▶ Все станции профиля (сшитый разрез)")
+        b2 = QtWidgets.QPushButton("Рассчитать профиль")
+        b2.setToolTip("Инверсия всех станций профиля с построением сшитого 1D-разреза")
         b2.clicked.connect(self.run_profile)
         self.cmap = QtWidgets.QComboBox()
         self.cmap.addItems(CMAPS)
@@ -66,10 +70,11 @@ class Tab1D(QtWidgets.QWidget):
         self.info.setWordWrap(True)
 
         left = QtWidgets.QVBoxLayout()
+        left.setSpacing(10)
         left.addLayout(form)
         left.addWidget(b1)
         left.addSpacing(10)
-        left.addWidget(QtWidgets.QLabel("Профиль:"))
+        left.addWidget(section_label("Сшитый разрез"))
         left.addWidget(self.prof)
         left.addWidget(b2)
         f2 = QtWidgets.QFormLayout()
@@ -82,10 +87,16 @@ class Tab1D(QtWidgets.QWidget):
         left.addStretch(1)
         lw = QtWidgets.QWidget()
         lw.setLayout(left)
-        lw.setMaximumWidth(330)
+        lw.setMinimumWidth(290)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setObjectName("parameterScroll")
+        scroll.setWidget(lw)
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(310)
+        scroll.setMaximumWidth(350)
 
         lay = QtWidgets.QHBoxLayout(self)
-        lay.addWidget(lw)
+        lay.addWidget(scroll)
         lay.addWidget(self.plot, 1)
 
     def refresh_profiles(self):
@@ -273,3 +284,4 @@ class Tab1D(QtWidgets.QWidget):
             w.writerow(["station", "distance_m", "top_depth_m", "rho_ohmm"])
             w.writerows(rows)
         self.main.statusBar().showMessage(f"Сохранено: {path}", 5000)
+

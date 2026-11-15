@@ -11,7 +11,7 @@ from PySide6 import QtCore, QtWidgets
 
 from .. import tiles
 from ..profile import Profile
-from .common import MplWidget
+from .common import MplWidget, FlowLayout
 
 
 class MapTab(QtWidgets.QWidget):
@@ -25,7 +25,7 @@ class MapTab(QtWidgets.QWidget):
         self.selected = set()
         self._tile_cache = {}
 
-        ctl = QtWidgets.QHBoxLayout()
+        ctl = FlowLayout()
         ctl.addWidget(QtWidgets.QLabel("Подложка:"))
         self.base = QtWidgets.QComboBox()
         self.base.addItems(list(tiles.PROVIDERS))
@@ -49,14 +49,15 @@ class MapTab(QtWidgets.QWidget):
         ctl.addWidget(self.ellipses)
         ctl.addStretch(1)
 
-        ctl2 = QtWidgets.QHBoxLayout()
+        ctl2 = FlowLayout()
         self.rect_mode = QtWidgets.QCheckBox("выделять рамкой")
         self.rect_mode.toggled.connect(self._toggle_rect)
         ctl2.addWidget(self.rect_mode)
         b = QtWidgets.QPushButton("Снять выделение")
         b.clicked.connect(lambda: self.set_selection([], emit=True))
         ctl2.addWidget(b)
-        b = QtWidgets.QPushButton("➕ Профиль из выделенных")
+        b = QtWidgets.QPushButton("Создать профиль")
+        b.setProperty("role", "primary")
         b.clicked.connect(self.make_profile)
         ctl2.addWidget(b)
         ctl2.addWidget(QtWidgets.QLabel("Профили:"))
@@ -71,6 +72,7 @@ class MapTab(QtWidgets.QWidget):
 
         hint = QtWidgets.QLabel("Щелчок по станции — выделить/снять; Ctrl+щелчок — открыть её кривые.")
         hint.setStyleSheet("color: gray")
+        hint.setWordWrap(True)
         lay = QtWidgets.QVBoxLayout(self)
         lay.addLayout(ctl)
         lay.addLayout(ctl2)
@@ -319,3 +321,4 @@ class MapTab(QtWidgets.QWidget):
                                     interactive=False)
         self.rs.set_active(self.rect_mode.isChecked())
         self.plot.draw()
+

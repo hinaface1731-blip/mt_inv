@@ -22,13 +22,17 @@ from .pseudo import PseudoTab
 from .tab1d import Tab1D
 from .tab2d import Tab2D
 from .tab_tem import TabTEM, auto_link
+from .theme import apply_theme, icon
+from .shell import WorkspaceShell
 
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
+        apply_theme(self)
         self.setWindowTitle(f"MT-Inv {__version__} — инверсия МТ-данных")
         self.resize(1450, 900)
+        self.setMinimumSize(1000, 680)
         self.stations = {}   # name -> Station (порядок загрузки)
         self.profiles = []
         self.tems = {}       # name -> TEMSounding
@@ -37,28 +41,41 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---- список станций
         self.list = QtWidgets.QListWidget()
+        self.list.setObjectName("stationList")
+        self.list.setAccessibleName("Станции наблюдений")
+        self.list.setIconSize(QtCore.QSize(16, 16))
         self.list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.list.currentItemChanged.connect(self._on_current)
         self.list.itemSelectionChanged.connect(self._on_list_selection)
-        self.info = QtWidgets.QLabel("")
+        self.info = QtWidgets.QLabel("Выберите станцию, чтобы посмотреть её параметры.")
+        self.info.setObjectName("stationInfo")
         self.info.setWordWrap(True)
         self.info.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        lw = QtWidgets.QWidget()
+        lw = QtWidgets.QFrame()
         ll = QtWidgets.QVBoxLayout(lw)
-        ll.setContentsMargins(4, 4, 4, 4)
-        b = QtWidgets.QPushButton("📂 Открыть EDI…")
-        b.clicked.connect(self.open_files)
-        ll.addWidget(b)
-        b = QtWidgets.QPushButton("📁 Открыть папку…")
+        ll.setContentsMargins(16, 24, 16, 16)
+        ll.setSpacing(12)
+        heading = QtWidgets.QHBoxLayout()
+        heading.addWidget(QtWidgets.QLabel("Станции", objectName="stationHeading"), 1)
+        self.station_count = QtWidgets.QLabel("0", objectName="stationCount")
+        heading.addWidget(self.station_count)
+        ll.addLayout(heading)
+        self.station_search = QtWidgets.QLineEdit()
+        self.station_search.setPlaceholderText("Найти станцию…")
+        self.station_search.setClearButtonEnabled(True)
+        self.station_search.setAccessibleName("Поиск станции по имени")
+        self.station_search.addAction(icon("search"), QtWidgets.QLineEdit.LeadingPosition)
+        self.station_search.textChanged.connect(self.filter_stations)
+        ll.addWidget(self.station_search)
+        b = QtWidgets.QPushButton("Импорт папки с EDI")
+        b.setIcon(icon("folder"))
         b.clicked.connect(self.open_folder)
         ll.addWidget(b)
-        ll.addWidget(QtWidgets.QLabel("Станции (Ctrl/Shift — несколько):"))
+        hint = QtWidgets.QLabel("Ctrl / Shift — выбрать несколько")
+        hint.setProperty("role", "muted")
+        ll.addWidget(hint)
         ll.addWidget(self.list, 1)
         ll.addWidget(self.info)
-        dock = QtWidgets.QDockWidget("Станции", self)
-        dock.setWidget(lw)
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable)
-        self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, dock)
 
         # ---- вкладки
         self.tabs = QtWidgets.QTabWidget()
@@ -74,7 +91,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self.tab1d, "1D инверсия")
         self.tabs.addTab(self.tab2d, "2D инверсия")
         self.tabs.addTab(self.tabtem, "АМТЗ + ЗСБ")
-        self.setCentralWidget(self.tabs)
+        self.shell = WorkspaceShell(self, self.tabs, lw)
+        self.setCentralWidget(self.shell)
         self.map.selectionChanged.connect(self._on_map_selection)
         self.curves.maskChanged.connect(lambda: self._update_info(self.current_station()))
         self.map.profilesChanged.connect(self._profiles_changed)
@@ -100,6 +118,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._act(h, "Как пользоваться", self.help)
 
         self.statusBar().showMessage("Откройте EDI-файлы: Файл → Открыть (Ctrl+O)")
+        shortcuts = QtWidgets.QLabel("Ctrl+1…6  Разделы    ·    Ctrl+L  Станции")
+        shortcuts.setProperty("role", "muted")
+        self.statusBar().addPermanentWidget(shortcuts)
+
+    def filter_stations(self, query):
+        visible = 0
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            show = query.casefold() in item.text().casefold()
+            item.setHidden(not show)
+            visible += int(show)
+        total = self.list.count()
+        self.station_count.setText(f"{visible} / {total}" if query else str(total))
 
     def _act(self, menu, text, fn, sc=None):
         a = QtGui.QAction(text, self)
@@ -241,13 +272,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.list.blockSignals(True)
         self.list.clear()
         for n in self.stations:
-            self.list.addItem(n)
+            item = QtWidgets.QListWidgetItem(icon("wave"), n)
+            item.setToolTip(n)
+            self.list.addItem(item)
         self.list.blockSignals(False)
         if self.stations:
             items = self.list.findItems(cur, QtCore.Qt.MatchExactly) if cur else []
             self.list.setCurrentItem(items[0] if items else self.list.item(0))
         else:
             self.curves.set_station(None)
+            self.info.setText("Выберите станцию, чтобы посмотреть её параметры.")
+        self.filter_stations(self.station_search.text())
+        self.shell.refresh_context()
         self.map.refresh_periods()
         self.map.redraw()
         self.tabtem.refresh_stations()
@@ -257,6 +293,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pseudo.refresh_profiles()
         self.tab1d.refresh_profiles()
         self.tab2d.refresh_profiles()
+        self.shell.refresh_context()
 
     def _on_current(self, cur, _prev):
         st = self.stations.get(cur.text()) if cur else None
@@ -328,6 +365,7 @@ class MainWindow(QtWidgets.QMainWindow):
             json.dump(d, f, ensure_ascii=False, indent=1)
         self.project_path = path
         self.statusBar().showMessage(f"Проект сохранён: {path}", 5000)
+        self.shell.refresh_context()
 
     def open_project(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Открыть проект", "",
@@ -390,6 +428,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._profiles_changed()
         self.map.redraw()
         self.project_path = path
+
+        self.shell.refresh_context()
 
     def export_edi(self):
         d = QtWidgets.QFileDialog.getExistingDirectory(self, "Папка для EDI")
