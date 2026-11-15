@@ -183,7 +183,7 @@ class TabTEM(QtWidgets.QWidget):
 
         box = QtWidgets.QGroupBox("Параметры")
         f = QtWidgets.QFormLayout(box)
-        f.setRowWrapPolicy(QtWidgets.QFormLayout.WrapAllRows)
+        f.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         self.comp = QtWidgets.QComboBox()
         for k, t in COMPS:
             self.comp.addItem(t, k)
@@ -213,8 +213,8 @@ class TabTEM(QtWidgets.QWidget):
         self.apply_btn.setEnabled(False)
         self.apply_btn.clicked.connect(self.apply_shift)
         sl.addWidget(self.apply_btn)
-        b = QtWidgets.QPushButton("Применить ко всем привязанным")
-        b.setToolTip("Рассчитать и применить сдвиг для всех привязанных станций")
+        b = QtWidgets.QPushButton("Применить ко всем")
+        b.setToolTip("Рассчитать и применить сдвиг ко всем привязанным станциям")
         b.clicked.connect(self.shift_all)
         sl.addWidget(b)
         b = QtWidgets.QPushButton("Сбросить сдвиг станции")
